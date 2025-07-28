@@ -1,36 +1,49 @@
 const mongoose = require("mongoose");
 const crypto = require("crypto");
 
-const blockSchema = new mongoose.Schema({
-	index: Number,
-	timestamp: {
-		type: Date,
-		default: Date.now,
-	},
-	data: {
-		recordId: {
-			type: mongoose.Schema.Types.ObjectId,
-			ref: "MedicalRecord",
+const blockSchema = new mongoose.Schema(
+	{
+		index: Number,
+		timestamp: {
+			type: Date,
+			default: Date.now,
 		},
-		patientId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-		doctorId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-		diagnosis: String,
-		treatment: String,
-		action: {
+		data: {
+			recordId: {
+				type: mongoose.Schema.Types.ObjectId,
+				ref: "MedicalRecord",
+			},
+			patientId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+			doctorId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+			diagnosis: String,
+			treatment: String,
+			medication: String,
+			doctorNote: String,
+			dateBack: Date, // Ngày hẹn tái khám
+			action: {
+				type: String,
+				enum: ["create", "update", "delete"], // Thêm trường action để xác định loại giao dịch
+				required: true,
+			},
+			updatedBy: {
+				type: mongoose.Schema.Types.ObjectId,
+				ref: "User", // Người thực hiện cập nhật
+				required: () => {
+					return this.action === "update"; // Chỉ yêu cầu khi action là update
+				},
+			},
+		},
+		previousHash: {
 			type: String,
-			enum: ["create", "update", "delete"], // Thêm trường action để xác định loại giao dịch
+			required: true,
+		},
+		hash: {
+			type: String,
 			required: true,
 		},
 	},
-	previousHash: {
-		type: String,
-		required: true,
-	},
-	hash: {
-		type: String,
-		required: true,
-	},
-});
+	{ timestamps: true }
+);
 
 blockSchema.statics.calculateHash = function (
 	index,
@@ -40,10 +53,10 @@ blockSchema.statics.calculateHash = function (
 ) {
 	// XỬ LÝ TIMESTAMP THỐNG NHẤT
 	let timestampStr;
-	
+
 	if (timestamp instanceof Date) {
 		timestampStr = timestamp.toISOString();
-	} else if (typeof timestamp === 'number') {
+	} else if (typeof timestamp === "number") {
 		// Nếu là Date.now() (number), convert sang Date rồi toISOString
 		timestampStr = new Date(timestamp).toISOString();
 	} else {
@@ -56,7 +69,7 @@ blockSchema.statics.calculateHash = function (
 
 	const inputString = index + timestampStr + dataStr + previousHash;
 	const hash = crypto.createHash("sha256").update(inputString).digest("hex");
-	
+
 	return hash;
 };
 

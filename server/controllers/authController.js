@@ -90,7 +90,7 @@ const login = async (req, res) => {
 		// Set refresh token as httpOnly cookie (optional - for better security)
 		res.cookie("refreshToken", refreshToken, {
 			httpOnly: true,
-			secure: process.env.NODE_ENV === "production",
+			secure: true,
 			sameSite: "none",
 			maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
 		});
@@ -121,7 +121,7 @@ const logout = async (req, res) => {
 		if (cookies.refreshToken) {
 			res.clearCookie("refreshToken", {
 				httpOnly: true,
-				secure: process.env.NODE_ENV === "production",
+				secure: true,
 				sameSite: "none",
 			});
 		}
@@ -195,8 +195,8 @@ const refreshToken = async (req, res) => {
 		// Set new refresh token as httpOnly cookie
 		res.cookie("refreshToken", newRefreshToken, {
 			httpOnly: true,
-			secure: process.env.NODE_ENV === "production",
-			sameSite: "strict",
+			secure: true,
+			sameSite: "none",
 			maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
 		});
 

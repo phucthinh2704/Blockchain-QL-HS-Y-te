@@ -17,7 +17,10 @@ const medicalRecordSchema = new mongoose.Schema(
 			type: String,
 			required: true,
 		},
+		medication: String, // Thêm trường medication
+		doctorNote: String, // Thêm trường ghi chú của bác sĩ
 		treatment: String,
+		dateBack: Date, // Ngày hẹn tái khám
 		blockchainHash: {
 			type: String,
 			required: false, // sẽ gán trong middleware
@@ -37,37 +40,40 @@ medicalRecordSchema.post("save", async function (doc, next) {
 			const latestBlock = await Block.findOne().sort({ index: -1 });
 			const previousHash = latestBlock ? latestBlock.hash : "0";
 
-			// SỬ DỤNG Date OBJECT THAY VÌ Date.now()
+			// Tạo block với tất cả các trường mới
 			const newBlock = new Block({
 				index: latestBlock ? latestBlock.index + 1 : 0,
-				timestamp: new Date(), // ✅ Sử dụng Date object
+				timestamp: new Date(),
 				data: {
 					recordId: doc._id,
 					patientId: doc.patientId,
 					doctorId: doc.doctorId,
 					diagnosis: doc.diagnosis,
 					treatment: doc.treatment,
-					action: "create", // Thêm trường action để xác định loại giao dịch
+					medication: doc.medication, // Thêm medication vào block data
+					doctorNote: doc.doctorNote, // Thêm doctorNote vào block data
+					dateBack: doc.dateBack, // Thêm dateBack vào block data
+					action: "create",
 				},
 				previousHash: previousHash,
 			});
-			
+
 			newBlock.hash = Block.calculateHash(
 				newBlock.index,
 				newBlock.timestamp,
 				newBlock.data,
 				newBlock.previousHash
 			);
-			
+
 			await newBlock.save();
 
 			console.log(
 				`✅ Block ${newBlock.index} created for medical record ${doc._id}`
 			);
-			
-			await doc.updateOne({ 
-				blockchainHash: newBlock.hash, 
-				blockIndex: newBlock.index 
+
+			await doc.updateOne({
+				blockchainHash: newBlock.hash,
+				blockIndex: newBlock.index,
 			});
 		} catch (err) {
 			console.error("Lỗi khi tạo block:", err);
@@ -101,12 +107,11 @@ medicalRecordSchema.statics.verifyBlockchain = async function () {
 			);
 
 			if (currentBlock.hash !== calculatedHash) {
-				
 				return {
 					valid: false,
 					message: `Block ${currentBlock.index} has invalid hash`,
 					storedHash: currentBlock.hash,
-					calculatedHash: calculatedHash
+					calculatedHash: calculatedHash,
 				};
 			}
 
@@ -118,7 +123,7 @@ medicalRecordSchema.statics.verifyBlockchain = async function () {
 						valid: false,
 						message: `Block ${currentBlock.index} has invalid previous hash`,
 						expectedPreviousHash: previousBlock.hash,
-						actualPreviousHash: currentBlock.previousHash
+						actualPreviousHash: currentBlock.previousHash,
 					};
 				}
 			}
@@ -142,7 +147,7 @@ medicalRecordSchema.methods.getBlockchainHistory = async function () {
 	try {
 		const blocks = await Block.find({
 			"data.recordId": this._id,
-		}).sort({ index: 1 });
+		}).sort({ index: 1 }).populate("data.updatedBy", "name email");;
 
 		return blocks.map((block) => ({
 			blockIndex: block.index,
@@ -150,11 +155,56 @@ medicalRecordSchema.methods.getBlockchainHistory = async function () {
 			hash: block.hash,
 			action: block.data.action || "UNKNOWN",
 			data: block.data,
+			updatedBy: block.data.updatedBy
+				? {
+						_id: block.data.updatedBy._id,
+						name: block.data.updatedBy.name,
+						email: block.data.updatedBy.email,
+				  }
+				: null,
 		}));
 	} catch (err) {
 		console.error("Error getting blockchain history:", err);
 		return [];
 	}
 };
+
+// Method để tìm kiếm theo medication
+medicalRecordSchema.statics.findByMedication = async function (
+	medicationQuery
+) {
+	return this.find({
+		medication: { $regex: medicationQuery, $options: "i" },
+	}).populate("patientId doctorId");
+};
+
+// Method để lấy các hẹn tái khám sắp tới
+medicalRecordSchema.statics.getUpcomingAppointments = async function (
+	doctorId = null
+) {
+	const today = new Date();
+	today.setHours(0, 0, 0, 0);
+
+	const query = {
+		dateBack: { $gte: today },
+	};
+
+	if (doctorId) {
+		query.doctorId = doctorId;
+	}
+
+	return this.find(query)
+		.populate("patientId", "name email phoneNumber")
+		.populate("doctorId", "name email")
+		.sort({ dateBack: 1 });
+};
+
+// Virtual để check xem có hẹn tái khám hay không
+medicalRecordSchema.virtual("hasFollowUp").get(function () {
+	return this.dateBack && this.dateBack > new Date();
+});
+
+// Ensure virtual fields are serialized
+medicalRecordSchema.set("toJSON", { virtuals: true });
 
 module.exports = mongoose.model("MedicalRecord", medicalRecordSchema);

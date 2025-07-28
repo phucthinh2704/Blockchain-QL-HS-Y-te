@@ -9,7 +9,14 @@ const registerUser = async (req, res) => {
 			req.body;
 
 		// Kiểm tra thông tin bắt buộc
-		if (!email || !password || !name || !role || !phoneNumber || !dateOfBirth) {
+		if (
+			!email ||
+			!password ||
+			!name ||
+			!role ||
+			!phoneNumber ||
+			!dateOfBirth
+		) {
 			return res.status(400).json({
 				success: false,
 				message:
@@ -58,12 +65,16 @@ const registerUser = async (req, res) => {
 			userData.phoneNumber = phoneNumber.trim();
 		}
 		if (dateOfBirth) {
-            if(!Date.parse(dateOfBirth) || dateOfBirth < "1900-01-01" || dateOfBirth > new Date().toISOString().split("T")[0]) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Ngày sinh không hợp lệ",
-                });
-            }
+			if (
+				!Date.parse(dateOfBirth) ||
+				dateOfBirth < "1900-01-01" ||
+				dateOfBirth > new Date().toISOString().split("T")[0]
+			) {
+				return res.status(400).json({
+					success: false,
+					message: "Ngày sinh không hợp lệ",
+				});
+			}
 			userData.dateOfBirth = new Date(dateOfBirth);
 		}
 
@@ -268,15 +279,7 @@ const getUserById = async (req, res) => {
 const updateUser = async (req, res) => {
 	try {
 		const { userId } = req.params;
-		const { name, phoneNumber, dateOfBirth } = req.body;
-
-		// Validate ObjectId format
-		if (!userId.match(/^[0-9a-fA-F]{24}$/)) {
-			return res.status(400).json({
-				success: false,
-				message: "ID người dùng không hợp lệ",
-			});
-		}
+		const { email, name, phoneNumber } = req.body;
 
 		// Kiểm tra quyền: user chỉ được cập nhật thông tin của chính họ (trừ admin)
 		if (req.user.role !== "admin" && userId !== req.user.userId) {
@@ -298,16 +301,62 @@ const updateUser = async (req, res) => {
 		// Chuẩn bị dữ liệu cập nhật
 		const updateData = {};
 
+		// Cập nhật email (kiểm tra unique nếu có thay đổi)
+		if (email !== undefined && email.trim()) {
+			const trimmedEmail = email.trim().toLowerCase();
+
+			// Kiểm tra định dạng email
+			const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+			if (!emailRegex.test(trimmedEmail)) {
+				return res.status(400).json({
+					success: false,
+					message: "Email không hợp lệ",
+				});
+			}
+
+			// Kiểm tra nếu email mới khác với email hiện tại
+			if (trimmedEmail !== currentUser.email) {
+				// Kiểm tra email đã tồn tại chưa
+				const existingUser = await User.findOne({
+					email: trimmedEmail,
+					_id: { $ne: userId }, // Loại trừ user hiện tại
+				});
+
+				if (existingUser) {
+					return res.status(400).json({
+						success: false,
+						message: "Email đã được sử dụng bởi người dùng khác",
+					});
+				}
+
+				updateData.email = trimmedEmail;
+			}
+		}
+
+		// Cập nhật name
 		if (name !== undefined && name.trim()) {
 			updateData.name = name.trim();
 		}
 
+		// Cập nhật phoneNumber
 		if (phoneNumber !== undefined) {
-			updateData.phoneNumber = phoneNumber ? phoneNumber.trim() : null;
+			const trimmedPhone = phoneNumber.trim();
+			const phoneRegex = /^0\d{9}$/; // Ví dụ: 10 số, bắt đầu bằng 0 (ở VN)
+			if (trimmedPhone && !phoneRegex.test(trimmedPhone)) {
+				return res.status(400).json({
+					success: false,
+					message: "Số điện thoại không hợp lệ",
+				});
+			}
+			updateData.phoneNumber = trimmedPhone || null;
 		}
 
-		if (dateOfBirth !== undefined) {
-			updateData.dateOfBirth = dateOfBirth ? new Date(dateOfBirth) : null;
+		// Kiểm tra có dữ liệu để cập nhật không
+		if (Object.keys(updateData).length === 0) {
+			return res.status(400).json({
+				success: false,
+				message: "Không có dữ liệu để cập nhật",
+			});
 		}
 
 		// Cập nhật user
@@ -340,6 +389,14 @@ const updateUser = async (req, res) => {
 				success: false,
 				message: "Lỗi validation",
 				errors: messages,
+			});
+		}
+
+		// Xử lý lỗi duplicate key (email đã tồn tại)
+		if (error.code === 11000) {
+			return res.status(400).json({
+				success: false,
+				message: "Email đã được sử dụng bởi người dùng khác",
 			});
 		}
 

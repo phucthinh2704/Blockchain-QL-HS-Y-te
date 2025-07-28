@@ -10,7 +10,7 @@ router.post("/register", userController.registerUser);
 router.get("/", authenticateToken, authorize(["admin"]), userController.getUsers);
 
 // Roles: patient, doctor, admin - Lấy danh sách bác sĩ
-router.get("/doctors", authenticateToken, authorize(["patient", "doctor", "admin"]), userController.getDoctors);
+router.get("/doctors", authenticateToken, authorize(["doctor", "admin"]), userController.getDoctors);
 
 // Roles: doctor, admin - Lấy danh sách bệnh nhân
 router.get("/patients", authenticateToken, authorize(["doctor", "admin"]), userController.getPatients);
