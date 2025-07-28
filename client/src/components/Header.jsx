@@ -40,16 +40,16 @@ const Header = () => {
 
 	const handleProfileClick = () => {
 		setShowDropdown(false);
-		navigate("/profile");
+		navigate("/", { state: { activeTab: "profile" } });
 	};
 
-	const handleSettingsClick = () => {
+	const handleMedicalClick = () => {
 		setShowDropdown(false);
-		navigate("/settings");
+		navigate("/", { state: { activeTab: "medical-records" } });
 	};
 
 	return (
-		<header className="pl-60 bg-white shadow-sm border-b border-gray-200">
+		<header className="bg-white shadow-sm border-b border-gray-200">
 			<div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
 				<div className="flex justify-between items-center h-16">
 					{/* Logo */}
@@ -107,17 +107,17 @@ const Header = () => {
 										</div>
 
 										<button
+											onClick={handleMedicalClick}
+											className="flex items-center w-full px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 transition-colors duration-200">
+											<Activity className="w-4 h-4 mr-3 text-gray-500" />
+											Hồ sơ y tế
+										</button>
+
+										<button
 											onClick={handleProfileClick}
 											className="flex items-center w-full px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 transition-colors duration-200">
 											<User className="w-4 h-4 mr-3 text-gray-500" />
 											Hồ sơ cá nhân
-										</button>
-
-										<button
-											onClick={handleSettingsClick}
-											className="flex items-center w-full px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 transition-colors duration-200">
-											<Settings className="w-4 h-4 mr-3 text-gray-500" />
-											Cài đặt
 										</button>
 
 										<div className="border-t border-gray-100">

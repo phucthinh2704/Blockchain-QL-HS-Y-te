@@ -7,3 +7,11 @@ export const apiRegister = async (data) =>
 		data,
 		withCredentials: true,
 	});
+
+export const apiUpdateUser = async (userId, data) =>
+	axios({
+		method: "PUT",
+		url: `/users/${userId}`,
+		data,
+		withCredentials: true,
+	});

@@ -31,9 +31,8 @@ const AuthProvider = ({ children }) => {
 			localStorage.removeItem("user");
 			localStorage.removeItem("accessToken");
 			localStorage.removeItem("refreshToken");
-		} finally {
-			setIsLoading(false);
 		}
+		setIsLoading(false);
 	};
 
 	const login = (userData, accessTokenData, refreshTokenData) => {
@@ -60,23 +59,23 @@ const AuthProvider = ({ children }) => {
 	const logout = async () => {
 		try {
 			// Xóa khỏi localStorage
-         const response = await apiLogout();
-         if(response.success) {
-            console.log("Logout successful");
+			const response = await apiLogout();
+			if (response.success) {
+				console.log("Logout successful");
 
-            localStorage.removeItem("user");
-            localStorage.removeItem("accessToken");
-            localStorage.removeItem("refreshToken");
-   
-            // Reset state
-            setUser(null);
-            setAccessToken(null);
-            setRefreshToken(null);
-   
-            return true;
-         }
+				localStorage.removeItem("user");
+				localStorage.removeItem("accessToken");
+				localStorage.removeItem("refreshToken");
 
-         return false;
+				// Reset state
+				setUser(null);
+				setAccessToken(null);
+				setRefreshToken(null);
+
+				return true;
+			}
+
+			return false;
 		} catch (error) {
 			console.error("Error during logout:", error);
 			return false;
@@ -122,8 +121,6 @@ const AuthProvider = ({ children }) => {
 		updateUser,
 		getAuthHeaders,
 	};
-
-   console.log({user, accessToken, refreshToken, isLoading});
 
 	return (
 		<AuthContext.Provider value={value}>{children}</AuthContext.Provider>

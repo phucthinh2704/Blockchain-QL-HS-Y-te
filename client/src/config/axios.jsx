@@ -7,33 +7,28 @@ const instance = axios.create({
 // Add a request interceptor
 instance.interceptors.request.use(
    function (config) {
-      // Do something before request is sent
-      const localStorageData = JSON.parse(window.localStorage.getItem("user")) || {};
-      if (localStorageData.token) {
-         const accessToken = JSON.parse(localStorageData.token);
-         config.headers = { authorization: `${accessToken}` };
-         return config;
+      const accessToken = window.localStorage.getItem("accessToken");
+      if (accessToken) {
+         config.headers['authorization'] = `Bearer ${accessToken}`;
       }
       return config;
    },
    function (error) {
-      // Do something with request error
       return Promise.reject(error);
    }
 );
 
+
 // Add a response interceptor
+// interceptor response — sửa đoạn này:
 instance.interceptors.response.use(
    function (response) {
-      // Any status code that lie within the range of 2xx cause this function to trigger
-      // Do something with response data
-      return response.data;
+      return response.data; // OK
    },
    function (error) {
-      // Any status codes that falls outside the range of 2xx cause this function to trigger
-      // Do something with response error
       return error.response.data;
    }
 );
+
 
 export default instance;

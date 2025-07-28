@@ -15,7 +15,7 @@ import { useState } from "react";
 import Swal from "sweetalert2";
 import { apiRegister } from "../apis/user";
 import { apiLogin } from "../apis/auth";
-import { useNavigate } from "react-router-dom";
+import { Navigate, useNavigate } from "react-router-dom";
 import useAuth from "../hooks/useAuth"; // Import useAuth
 
 const MedicalAuthSystem = () => {
@@ -45,6 +45,11 @@ const MedicalAuthSystem = () => {
 
 	const [errors, setErrors] = useState({});
 
+	const { user } = useAuth(); // Get user from Auth Context
+	if (user) {
+		return <Navigate to="/" replace />;
+	}
+
 	const validateEmail = (email) => {
 		const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 		return emailRegex.test(email);
@@ -69,7 +74,6 @@ const MedicalAuthSystem = () => {
 
 		try {
 			const response = await apiLogin(loginData);
-			console.log(response.success);
 			
 			if(response.success) {
 				// Lưu thông tin đăng nhập qua Auth Context
@@ -85,6 +89,8 @@ const MedicalAuthSystem = () => {
 						icon: "success",
 						title: "Đăng nhập thành công",
 						text: "Chào mừng bạn trở lại!",
+						timer: 1500,
+						showConfirmButton: false,
 					}).then(() => {
 						// Reset login data
 						setLoginData({
