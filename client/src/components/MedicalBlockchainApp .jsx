@@ -25,7 +25,7 @@ import {
 import { useState } from "react";
 import { Navigate } from "react-router-dom";
 import MedicalRecords from "./MedicalRecords";
-import Sidebar from "./Sidebar";
+import Sidebar from "./common/Sidebar";
 
 const MedicalBlockchainApp = () => {
 	const [activeTab, setActiveTab] = useState("dashboard");

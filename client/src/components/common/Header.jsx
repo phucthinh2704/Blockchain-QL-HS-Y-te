@@ -1,6 +1,6 @@
 // components/Header.js
 import React, { useState } from "react";
-import useAuth from "../hooks/useAuth";
+import useAuth from "../../hooks/useAuth";
 import { useNavigate } from "react-router-dom";
 import { Activity, User, LogOut, Settings, ChevronDown } from "lucide-react";
 import Swal from "sweetalert2";
@@ -73,13 +73,13 @@ const Header = () => {
 						<div className="relative">
 							<button
 								onClick={() => setShowDropdown(!showDropdown)}
-								className="flex items-center space-x-3 p-2 rounded-lg hover:bg-gray-100 transition-colors duration-200">
-								<div className="flex items-center justify-center w-8 h-8 bg-gray-300 rounded-full">
-									<User className="w-5 h-5 text-gray-600" />
+								className="flex items-center cursor-pointer space-x-3 p-2 rounded-lg hover:bg-blue-200 transition-colors duration-200">
+								<div className="flex items-center justify-center w-8 h-8 bg-blue-100 rounded-full">
+									<User className="w-5 h-5 text-blue-600" />
 								</div>
 								<div className="hidden md:block text-left">
 									<p className="text-sm font-medium text-gray-900">
-										{user?.name || "Người dùng"}
+										{user?.role === "doctor" ? "BS. " : ""} {user?.name || "Người dùng"}
 									</p>
 									<p className="text-xs text-gray-500">
 										{user?.email || "user@example.com"}
@@ -108,14 +108,14 @@ const Header = () => {
 
 										<button
 											onClick={handleMedicalClick}
-											className="flex items-center w-full px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 transition-colors duration-200">
+											className="flex items-center w-full px-4 py-3 text-sm text-gray-700 hover:bg-gray-100 transition-colors duration-200 cursor-pointer">
 											<Activity className="w-4 h-4 mr-3 text-gray-500" />
 											Hồ sơ y tế
 										</button>
 
 										<button
 											onClick={handleProfileClick}
-											className="flex items-center w-full px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 transition-colors duration-200">
+											className="flex items-center w-full px-4 py-3 text-sm text-gray-700 hover:bg-gray-100 transition-colors duration-200 cursor-pointer">
 											<User className="w-4 h-4 mr-3 text-gray-500" />
 											Hồ sơ cá nhân
 										</button>
@@ -123,7 +123,7 @@ const Header = () => {
 										<div className="border-t border-gray-100">
 											<button
 												onClick={handleLogout}
-												className="flex items-center w-full px-4 py-3 text-sm text-red-600 hover:bg-red-50 transition-colors duration-200">
+												className="flex items-center w-full px-4 py-3 text-sm text-red-600 hover:bg-red-100 transition-colors duration-200 cursor-pointer">
 												<LogOut className="w-4 h-4 mr-3" />
 												Đăng xuất
 											</button>

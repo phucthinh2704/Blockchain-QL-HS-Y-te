@@ -47,7 +47,12 @@ const MedicalAuthSystem = () => {
 
 	const { user } = useAuth(); // Get user from Auth Context
 	if (user) {
-		return <Navigate to="/" replace />;
+		return (
+			<Navigate
+				to="/"
+				replace
+			/>
+		);
 	}
 
 	const validateEmail = (email) => {
@@ -74,8 +79,8 @@ const MedicalAuthSystem = () => {
 
 		try {
 			const response = await apiLogin(loginData);
-			
-			if(response.success) {
+
+			if (response.success) {
 				// Lưu thông tin đăng nhập qua Auth Context
 				const loginSuccess = login(
 					response.data.user,
@@ -97,7 +102,11 @@ const MedicalAuthSystem = () => {
 							email: "",
 							password: "",
 						});
-						navigate("/");
+						if (response.data.user.role === "doctor") {
+							navigate("/doctors");
+						} else if (response.data.user.role === "patient") {
+							navigate("/");
+						}
 					});
 				} else {
 					setErrors({ general: "Lỗi lưu thông tin đăng nhập" });
@@ -232,7 +241,14 @@ const MedicalAuthSystem = () => {
 				<div className="bg-white rounded-2xl shadow-xl p-8 backdrop-blur-sm border border-white/20">
 					{isLogin ? (
 						// Login Form
-						<div className="space-y-5">
+						<div
+							className="space-y-5"
+							onKeyDown={(e) => {
+								if (e.key === "Enter") {
+									e.preventDefault();
+									handleLogin();
+								}
+							}}>
 							<div>
 								<label className="block text-sm font-medium text-gray-700 mb-2">
 									Email

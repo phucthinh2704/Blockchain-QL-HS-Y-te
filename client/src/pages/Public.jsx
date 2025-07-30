@@ -1,7 +1,7 @@
 import React from 'react';
 import MedicalBlockchainApp from '../components/MedicalBlockchainApp ';
-import Header from '../components/Header';
-import PatientDashboard from '../components/PatientDashboard';
+import Header from '../components/common/Header';
+import PatientDashboard from '../components/patient/PatientDashboard';
 
 const Public = () => {
    return (

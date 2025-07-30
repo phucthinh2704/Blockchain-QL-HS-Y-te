@@ -61,20 +61,19 @@ const AuthProvider = ({ children }) => {
 			// Xóa khỏi localStorage
 			const response = await apiLogout();
 			if (response.success) {
-				console.log("Logout successful");
+				setTimeout(() => {
+					localStorage.removeItem("user");
+					localStorage.removeItem("accessToken");
+					localStorage.removeItem("refreshToken");
 
-				localStorage.removeItem("user");
-				localStorage.removeItem("accessToken");
-				localStorage.removeItem("refreshToken");
+					// Reset state
+					setUser(null);
+					setAccessToken(null);
+					setRefreshToken(null);
 
-				// Reset state
-				setUser(null);
-				setAccessToken(null);
-				setRefreshToken(null);
-
+				}, 1000);
 				return true;
 			}
-
 			return false;
 		} catch (error) {
 			console.error("Error during logout:", error);

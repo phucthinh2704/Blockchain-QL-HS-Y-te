@@ -37,4 +37,44 @@ export const apiVerifyRecord = async (recordId) => {
 		console.error("Error in apiVerifyRecord:", error);
 		throw error;
 	}
-}
+};
+
+export const apiGetRecordByDoctor = async (doctorId) => {
+	try {
+		const response = await axios({
+			method: "GET",
+			url: `/medical/doctor/${doctorId}`,
+		});
+		return response;
+	} catch (error) {
+		console.error("Error in apiGetRecordByDoctor:", error);
+		throw error;
+	}
+};
+
+export const apiCreateMedicalRecord = async (data) => {
+	try {
+		const response = await axios({
+			method: "POST",
+			url: "/medical",
+			data,
+		});
+		return response;
+	} catch (error) {
+		console.error("Error in apiCreateMedicalRecord:", error);
+		throw error;
+	}
+};
+
+export const apiGetUpcomingAppointments = async (doctorId) => {
+	try {
+		const response = await axios({
+			method: "GET",
+			url: `/medical/appointments/doctor/${doctorId}`,
+		});
+		return response;
+	} catch (error) {
+		console.error("Error in apiGetUpcomingAppointments:", error);
+		throw error;
+	}
+};

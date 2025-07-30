@@ -282,7 +282,7 @@ router.get(
 			}
 
 			const records = await MedicalRecord.find({ doctorId })
-				.populate("patientId", "name email phoneNumber")
+				.populate("patientId", "name email phoneNumber dateOfBirth")
 				.sort({ createdAt: -1 });
 
 			res.json({
@@ -642,6 +642,33 @@ router.get(
 			res.status(500).json({
 				success: false,
 				message: "Lỗi lấy lịch sử blockchain",
+				error: error.message,
+			});
+		}
+	}
+);
+
+// 12. Get appointments by doctor ID
+router.get(
+	"/appointments/doctor/:doctorId",
+	authenticateToken,
+	authorize(["doctor", "admin"]),
+	async (req, res) => {
+		try {
+			const { doctorId } = req.params;
+
+			const appointments = await MedicalRecord.getUpcomingAppointments(doctorId);
+
+			res.json({
+				success: true,
+				data: appointments,
+				total: appointments.length,
+			});
+		} catch (error) {
+			console.error("Error getting doctor appointments:", error);
+			res.status(500).json({
+				success: false,
+				message: "Lỗi lấy hồ sơ bác sĩ",
 				error: error.message,
 			});
 		}

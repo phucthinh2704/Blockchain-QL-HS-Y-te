@@ -3,6 +3,7 @@ import "./App.css";
 import MedicalBlockchainApp from "./components/MedicalBlockchainApp ";
 import LoginRegister from "./pages/Login";
 import Public from "./pages/Public";
+import DoctorDashboard from "./pages/Doctor";
 
 function App() {
 	return (
@@ -14,6 +15,10 @@ function App() {
 			<Route
 				path={`/`}
 				element={<Public />}
+			/>
+			<Route
+				path={`/doctors`}
+				element={<DoctorDashboard />}
 			/>
 		</Routes>
 	);

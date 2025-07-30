@@ -41,3 +41,16 @@ export const apiVerifyPatientBlocksTimeRange = async (patientId, startDate, endD
       throw error;
    }
 };
+
+export const apiGetDetailBlockByIndex = async (index) => {
+   try {
+      const response = await axios({
+         method: "GET",
+         url: `/blockchain/block/${index}`,
+      });
+      return response;
+   } catch (error) {
+      console.error("Error in apiGetDetailBlockByIndex:", error);
+      throw error;
+   }
+}

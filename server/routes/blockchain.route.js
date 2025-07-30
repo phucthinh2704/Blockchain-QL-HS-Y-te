@@ -126,7 +126,7 @@ router.get(
 router.get(
 	"/block/:blockIndex",
 	authenticateToken,
-	authorize(["doctor", "admin"]),
+	authorize(["patient","doctor", "admin"]),
 	async (req, res) => {
 		try {
 			const { blockIndex } = req.params;
@@ -142,7 +142,8 @@ router.get(
 			const block = await Block.findOne({ index })
 				.populate("data.patientId", "name email")
 				.populate("data.doctorId", "name email")
-				.populate("data.recordId");
+				.populate("data.recordId")
+				.populate("data.updatedBy", "name email");
 
 			if (!block) {
 				return res.status(404).json({
@@ -358,7 +359,9 @@ router.get(
 			}
 
 			// Lấy block tương ứng với medical record
-			const block = await Block.findOne({ "data.recordId": recordId }).sort({ index: -1 });
+			const block = await Block.findOne({
+				"data.recordId": recordId,
+			}).sort({ index: -1 });
 			if (!block) {
 				return res.status(404).json({
 					success: false,
@@ -367,15 +370,30 @@ router.get(
 			}
 
 			// Tính lại hash và so sánh
+			const data = {
+				recordId: medicalRecord._id,
+				patientId: medicalRecord.patientId,
+				doctorId: medicalRecord.doctorId,
+				diagnosis: medicalRecord.diagnosis,
+				treatment: medicalRecord.treatment,
+				medication: medicalRecord.medication,
+				doctorNote: medicalRecord.doctorNote,
+				dateBack: medicalRecord.dateBack,
+				action: block.data.action, // Lấy action từ block
+			};
+			if (block.data.action === "update") {
+				data.updatedBy = block.data.updatedBy; // Chỉ thêm updatedBy nếu action là update
+			}
 			const calculatedHash = Block.calculateHash(
 				block.index,
 				block.timestamp,
-				block.data,
+				data,
 				block.previousHash
 			);
 
-			const isValid = calculatedHash === block.hash;
-
+			const isValid =
+				calculatedHash === medicalRecord.blockchainHash &&
+				calculatedHash === block.hash;
 			res.json({
 				success: true,
 				message: "Kết quả xác thực hồ sơ y tế",
@@ -420,11 +438,14 @@ router.get(
 			}
 
 			// QUAN TRỌNG: Lấy blocks KHÔNG populate để giữ nguyên dữ liệu gốc cho việc tính hash
-			const patientBlocks = await Block.find({ "data.patientId": patientId })
-				.sort({ index: 1 });
+			const patientBlocks = await Block.find({
+				"data.patientId": patientId,
+			}).sort({ index: 1 });
 
 			// Sau đó lấy thêm thông tin populated riêng để hiển thị
-			const patientBlocksWithPopulate = await Block.find({ "data.patientId": patientId })
+			const patientBlocksWithPopulate = await Block.find({
+				"data.patientId": patientId,
+			})
 				.populate("data.doctorId", "name email")
 				.populate("data.recordId")
 				.sort({ index: 1 });
@@ -450,7 +471,7 @@ router.get(
 			for (let i = 0; i < patientBlocks.length; i++) {
 				const currentBlock = patientBlocks[i]; // Dùng block KHÔNG populate
 				const currentBlockWithPopulate = patientBlocksWithPopulate[i]; // Dùng cho hiển thị
-				
+
 				// Tạo raw data object để tính hash - đảm bảo format giống lúc tạo block
 				const rawData = {
 					recordId: currentBlock.data.recordId,
@@ -468,7 +489,7 @@ router.get(
 				if (currentBlock.data.updatedBy) {
 					rawData.updatedBy = currentBlock.data.updatedBy;
 				}
-				
+
 				// Tính lại hash của block hiện tại với raw data
 				const calculatedHash = Block.calculateHash(
 					currentBlock.index,
@@ -478,20 +499,21 @@ router.get(
 				);
 
 				const isHashValid = currentBlock.hash === calculatedHash;
-				
+
 				// Kiểm tra tính liên kết với blockchain chính
 				let isPreviousHashValid = true;
 				let expectedPreviousHash = null;
-				
+
 				if (currentBlock.index > 0) {
 					// Lấy block trước đó trong blockchain chính (không populate)
-					const previousBlock = await Block.findOne({ 
-						index: currentBlock.index - 1 
+					const previousBlock = await Block.findOne({
+						index: currentBlock.index - 1,
 					});
-					
+
 					if (previousBlock) {
 						expectedPreviousHash = previousBlock.hash;
-						isPreviousHashValid = currentBlock.previousHash === previousBlock.hash;
+						isPreviousHashValid =
+							currentBlock.previousHash === previousBlock.hash;
 					} else {
 						isPreviousHashValid = false;
 						expectedPreviousHash = "Block trước không tồn tại";
@@ -499,7 +521,7 @@ router.get(
 				}
 
 				const blockValid = isHashValid && isPreviousHashValid;
-				
+
 				if (!blockValid) {
 					overallValid = false;
 					invalidBlocksCount++;
@@ -511,11 +533,15 @@ router.get(
 					timestamp: currentBlock.timestamp,
 					action: currentBlock.data.action,
 					diagnosis: currentBlock.data.diagnosis,
-					doctorInfo: currentBlockWithPopulate.data.doctorId ? {
-						id: currentBlockWithPopulate.data.doctorId._id,
-						name: currentBlockWithPopulate.data.doctorId.name,
-						email: currentBlockWithPopulate.data.doctorId.email
-					} : null,
+					doctorInfo: currentBlockWithPopulate.data.doctorId
+						? {
+								id: currentBlockWithPopulate.data.doctorId._id,
+								name: currentBlockWithPopulate.data.doctorId
+									.name,
+								email: currentBlockWithPopulate.data.doctorId
+									.email,
+						  }
+						: null,
 					isValid: blockValid,
 					hashVerification: {
 						isValid: isHashValid,
@@ -530,7 +556,9 @@ router.get(
 					},
 					issues: [
 						...(!isHashValid ? ["Hash không hợp lệ"] : []),
-						...(!isPreviousHashValid ? ["Previous hash không hợp lệ"] : []),
+						...(!isPreviousHashValid
+							? ["Previous hash không hợp lệ"]
+							: []),
 					],
 				});
 			}
@@ -540,15 +568,20 @@ router.get(
 				totalBlocks: patientBlocks.length,
 				validBlocks: patientBlocks.length - invalidBlocksCount,
 				invalidBlocks: invalidBlocksCount,
-				validityPercentage: patientBlocks.length > 0 
-					? Math.round(((patientBlocks.length - invalidBlocksCount) / patientBlocks.length) * 100)
-					: 100,
+				validityPercentage:
+					patientBlocks.length > 0
+						? Math.round(
+								((patientBlocks.length - invalidBlocksCount) /
+									patientBlocks.length) *
+									100
+						  )
+						: 100,
 			};
 
 			res.json({
 				success: true,
-				message: overallValid 
-					? "Tất cả blocks của bệnh nhân đều hợp lệ" 
+				message: overallValid
+					? "Tất cả blocks của bệnh nhân đều hợp lệ"
 					: "Có blocks không hợp lệ được phát hiện",
 				data: {
 					patientId,
@@ -556,22 +589,39 @@ router.get(
 					statistics,
 					verificationResults,
 					summary: {
-						firstBlock: verificationResults.length > 0 ? {
-							index: verificationResults[0].blockIndex,
-							timestamp: verificationResults[0].timestamp,
-						} : null,
-						lastBlock: verificationResults.length > 0 ? {
-							index: verificationResults[verificationResults.length - 1].blockIndex,
-							timestamp: verificationResults[verificationResults.length - 1].timestamp,
-						} : null,
-						timespan: verificationResults.length > 1 ? {
-							from: verificationResults[0].timestamp,
-							to: verificationResults[verificationResults.length - 1].timestamp,
-						} : null,
+						firstBlock:
+							verificationResults.length > 0
+								? {
+										index: verificationResults[0]
+											.blockIndex,
+										timestamp:
+											verificationResults[0].timestamp,
+								  }
+								: null,
+						lastBlock:
+							verificationResults.length > 0
+								? {
+										index: verificationResults[
+											verificationResults.length - 1
+										].blockIndex,
+										timestamp:
+											verificationResults[
+												verificationResults.length - 1
+											].timestamp,
+								  }
+								: null,
+						timespan:
+							verificationResults.length > 1
+								? {
+										from: verificationResults[0].timestamp,
+										to: verificationResults[
+											verificationResults.length - 1
+										].timestamp,
+								  }
+								: null,
 					},
 				},
 			});
-
 		} catch (error) {
 			console.error("Error verifying patient blocks:", error);
 			res.status(500).json({
@@ -608,7 +658,7 @@ router.get(
 
 			if (startDate || endDate) {
 				dateQuery.timestamp = {};
-				
+
 				if (startDate) {
 					try {
 						parsedStartDate = new Date(startDate);
@@ -628,7 +678,7 @@ router.get(
 						});
 					}
 				}
-				
+
 				if (endDate) {
 					try {
 						parsedEndDate = new Date(endDate);
@@ -650,7 +700,11 @@ router.get(
 				}
 
 				// Validate date range logic
-				if (parsedStartDate && parsedEndDate && parsedStartDate > parsedEndDate) {
+				if (
+					parsedStartDate &&
+					parsedEndDate &&
+					parsedStartDate > parsedEndDate
+				) {
 					return res.status(400).json({
 						success: false,
 						message: "Ngày bắt đầu không thể sau ngày kết thúc",
@@ -661,35 +715,41 @@ router.get(
 			// Lấy blocks theo điều kiện KHÔNG populate để tính hash chính xác
 			const patientBlocks = await Block.find({
 				"data.patientId": patientId,
-				...dateQuery
+				...dateQuery,
 			}).sort({ index: 1 });
 
 			// Lấy blocks với populate để hiển thị thông tin
 			const patientBlocksWithPopulate = await Block.find({
 				"data.patientId": patientId,
-				...dateQuery
+				...dateQuery,
 			})
 				.populate("data.doctorId", "name email")
 				.populate("data.recordId")
+				.populate("data.updatedBy", "name email")
 				.sort({ index: 1 });
 
 			if (patientBlocks.length === 0) {
-				const timeRangeText = parsedStartDate && parsedEndDate 
-					? `từ ${parsedStartDate.toLocaleDateString('vi-VN')} đến ${parsedEndDate.toLocaleDateString('vi-VN')}`
-					: parsedStartDate 
-						? `từ ${parsedStartDate.toLocaleDateString('vi-VN')} trở đi`
-						: parsedEndDate 
-							? `đến ${parsedEndDate.toLocaleDateString('vi-VN')}`
-							: "trong khoảng thời gian này";
+				const timeRangeText =
+					parsedStartDate && parsedEndDate
+						? `từ ${parsedStartDate.toLocaleDateString(
+								"vi-VN"
+						  )} đến ${parsedEndDate.toLocaleDateString("vi-VN")}`
+						: parsedStartDate
+						? `từ ${parsedStartDate.toLocaleDateString(
+								"vi-VN"
+						  )} trở đi`
+						: parsedEndDate
+						? `đến ${parsedEndDate.toLocaleDateString("vi-VN")}`
+						: "trong khoảng thời gian này";
 
 				return res.json({
 					success: true,
 					message: `Không có blocks nào ${timeRangeText}`,
 					data: {
 						patientId,
-						timeRange: { 
-							startDate: parsedStartDate?.toISOString(), 
-							endDate: parsedEndDate?.toISOString() 
+						timeRange: {
+							startDate: parsedStartDate?.toISOString(),
+							endDate: parsedEndDate?.toISOString(),
 						},
 						totalBlocks: 0,
 						verificationResults: [],
@@ -747,13 +807,14 @@ router.get(
 
 				if (currentBlock.index > 0) {
 					// Lấy block trước đó trong blockchain chính (không populate)
-					const previousBlock = await Block.findOne({ 
-						index: currentBlock.index - 1 
+					const previousBlock = await Block.findOne({
+						index: currentBlock.index - 1,
 					});
-					
+
 					if (previousBlock) {
 						expectedPreviousHash = previousBlock.hash;
-						isPreviousHashValid = currentBlock.previousHash === previousBlock.hash;
+						isPreviousHashValid =
+							currentBlock.previousHash === previousBlock.hash;
 					} else {
 						isPreviousHashValid = false;
 						expectedPreviousHash = "Block trước không tồn tại";
@@ -767,7 +828,7 @@ router.get(
 					invalidBlocksCount++;
 				}
 
-				verificationResults.push({
+				const data = {
 					blockIndex: currentBlock.index,
 					recordId: currentBlock.data.recordId,
 					timestamp: currentBlock.timestamp,
@@ -777,11 +838,15 @@ router.get(
 					medication: currentBlock.data.medication,
 					doctorNote: currentBlock.data.doctorNote,
 					dateBack: currentBlock.data.dateBack,
-					doctorInfo: currentBlockWithPopulate.data.doctorId ? {
-						id: currentBlockWithPopulate.data.doctorId._id,
-						name: currentBlockWithPopulate.data.doctorId.name,
-						email: currentBlockWithPopulate.data.doctorId.email
-					} : null,
+					doctorInfo: currentBlockWithPopulate.data.doctorId
+						? {
+								id: currentBlockWithPopulate.data.doctorId._id,
+								name: currentBlockWithPopulate.data.doctorId
+									.name,
+								email: currentBlockWithPopulate.data.doctorId
+									.email,
+						  }
+						: null,
 					isValid: blockValid,
 					hashVerification: {
 						isValid: isHashValid,
@@ -796,9 +861,15 @@ router.get(
 					},
 					issues: [
 						...(!isHashValid ? ["Hash không hợp lệ"] : []),
-						...(!isPreviousHashValid ? ["Previous hash không hợp lệ"] : []),
+						...(!isPreviousHashValid
+							? ["Previous hash không hợp lệ"]
+							: []),
 					],
-				});
+				};
+				if (currentBlock.data.action === "update") {
+					data.updatedBy = currentBlockWithPopulate.data.updatedBy; // Chỉ thêm updatedBy nếu action là update
+				}
+				verificationResults.push(data);
 			}
 
 			// Tính toán thống kê
@@ -806,21 +877,29 @@ router.get(
 				totalBlocks: patientBlocks.length,
 				validBlocks: patientBlocks.length - invalidBlocksCount,
 				invalidBlocks: invalidBlocksCount,
-				validityPercentage: patientBlocks.length > 0 
-					? Math.round(((patientBlocks.length - invalidBlocksCount) / patientBlocks.length) * 100)
-					: 100,
+				validityPercentage:
+					patientBlocks.length > 0
+						? Math.round(
+								((patientBlocks.length - invalidBlocksCount) /
+									patientBlocks.length) *
+									100
+						  )
+						: 100,
 			};
 
 			// Tạo message mô tả khoảng thời gian
-			const timeRangeText = parsedStartDate && parsedEndDate 
-				? `từ ${parsedStartDate.toLocaleDateString('vi-VN')} đến ${parsedEndDate.toLocaleDateString('vi-VN')}`
-				: parsedStartDate 
-					? `từ ${parsedStartDate.toLocaleDateString('vi-VN')} trở đi`
-					: parsedEndDate 
-						? `đến ${parsedEndDate.toLocaleDateString('vi-VN')}`
-						: "trong khoảng thời gian này";
+			const timeRangeText =
+				parsedStartDate && parsedEndDate
+					? `từ ${parsedStartDate.toLocaleDateString(
+							"vi-VN"
+					  )} đến ${parsedEndDate.toLocaleDateString("vi-VN")}`
+					: parsedStartDate
+					? `từ ${parsedStartDate.toLocaleDateString("vi-VN")} trở đi`
+					: parsedEndDate
+					? `đến ${parsedEndDate.toLocaleDateString("vi-VN")}`
+					: "trong khoảng thời gian này";
 
-			const message = overallValid 
+			const message = overallValid
 				? `Tất cả ${statistics.totalBlocks} blocks ${timeRangeText} đều hợp lệ`
 				: `Có ${statistics.invalidBlocks}/${statistics.totalBlocks} blocks không hợp lệ ${timeRangeText}`;
 
@@ -829,7 +908,7 @@ router.get(
 				message: message,
 				data: {
 					patientId,
-					timeRange: { 
+					timeRange: {
 						startDate: parsedStartDate?.toISOString(),
 						endDate: parsedEndDate?.toISOString(),
 						displayText: timeRangeText,
@@ -838,42 +917,71 @@ router.get(
 					statistics,
 					verificationResults,
 					summary: {
-						firstBlock: verificationResults.length > 0 ? {
-							index: verificationResults[0].blockIndex,
-							timestamp: verificationResults[0].timestamp,
-							diagnosis: verificationResults[0].diagnosis,
-						} : null,
-						lastBlock: verificationResults.length > 0 ? {
-							index: verificationResults[verificationResults.length - 1].blockIndex,
-							timestamp: verificationResults[verificationResults.length - 1].timestamp,
-							diagnosis: verificationResults[verificationResults.length - 1].diagnosis,
-						} : null,
-						timespan: verificationResults.length > 1 ? {
-							from: verificationResults[0].timestamp,
-							to: verificationResults[verificationResults.length - 1].timestamp,
-							duration: Math.ceil((new Date(verificationResults[verificationResults.length - 1].timestamp) - new Date(verificationResults[0].timestamp)) / (1000 * 60 * 60 * 24)) + " ngày",
-						} : null,
+						firstBlock:
+							verificationResults.length > 0
+								? {
+										index: verificationResults[0]
+											.blockIndex,
+										timestamp:
+											verificationResults[0].timestamp,
+										diagnosis:
+											verificationResults[0].diagnosis,
+								  }
+								: null,
+						lastBlock:
+							verificationResults.length > 0
+								? {
+										index: verificationResults[
+											verificationResults.length - 1
+										].blockIndex,
+										timestamp:
+											verificationResults[
+												verificationResults.length - 1
+											].timestamp,
+										diagnosis:
+											verificationResults[
+												verificationResults.length - 1
+											].diagnosis,
+								  }
+								: null,
+						timespan:
+							verificationResults.length > 1
+								? {
+										from: verificationResults[0].timestamp,
+										to: verificationResults[
+											verificationResults.length - 1
+										].timestamp,
+										duration:
+											Math.ceil(
+												(new Date(
+													verificationResults[
+														verificationResults.length -
+															1
+													].timestamp
+												) -
+													new Date(
+														verificationResults[0].timestamp
+													)) /
+													(1000 * 60 * 60 * 24)
+											) + " ngày",
+								  }
+								: null,
 					},
-					// Thêm thông tin debug nếu cần
-					debug: {
-						queryUsed: dateQuery,
-						blocksFoundInTimeRange: patientBlocks.length,
-						dateValidation: {
-							startDateParsed: parsedStartDate?.toISOString(),
-							endDateParsed: parsedEndDate?.toISOString(),
-							isValidRange: !parsedStartDate || !parsedEndDate || parsedStartDate <= parsedEndDate,
-						}
-					}
 				},
 			});
-
 		} catch (error) {
-			console.error("Error verifying patient blocks with time range:", error);
+			console.error(
+				"Error verifying patient blocks with time range:",
+				error
+			);
 			res.status(500).json({
 				success: false,
 				message: "Lỗi xác thực blocks theo khoảng thời gian",
 				error: error.message,
-				stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
+				stack:
+					process.env.NODE_ENV === "development"
+						? error.stack
+						: undefined,
 			});
 		}
 	}
