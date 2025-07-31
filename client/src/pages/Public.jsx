@@ -1,9 +1,11 @@
-import React from 'react';
-import MedicalBlockchainApp from '../components/MedicalBlockchainApp ';
+import { useEffect } from 'react';
 import Header from '../components/common/Header';
 import PatientDashboard from '../components/patient/PatientDashboard';
 
 const Public = () => {
+   useEffect(() => {
+      document.title = "Medical Blockchain - Public Dashboard";
+   }, []);
    return (
       <div>
          <Header></Header>

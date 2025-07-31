@@ -20,8 +20,12 @@ import {
 	apiGetUpcomingAppointments,
 } from "../../apis/record";
 import Swal from "sweetalert2";
-import CreateMedicalRecordForm from "./CreateMedicalRecordForm ";
+import CreateMedicalRecordForm from "./CreateMedicalRecordForm";
 import moment from "moment";
+import DetailRecord from "./DetailRecord";
+import MedicalRecordEditor from "./MedicalRecordEditor";
+import PatientDetailModal from "./PatientDetailModal";
+import { useLocation } from "react-router-dom";
 
 const DoctorDashboard = () => {
 	const [activeTab, setActiveTab] = useState("dashboard");
@@ -31,8 +35,20 @@ const DoctorDashboard = () => {
 	const [records, setRecords] = useState([]);
 	const [patients, setPatients] = useState([]);
 	const [upcomingAppointments, setUpcomingAppointments] = useState([]);
+	const [selectedRecord, setSelectedRecord] = useState({});
+	const [showDetailRecord, setShowDetailRecord] = useState(false);
+	const [isEditing, setIsEditing] = useState(false);
+	const [showDetailPatient, setShowDetailPatient] = useState(false);
+	const location = useLocation();
 
 	const { user } = useAuth();
+
+	useEffect(() => {
+		const { activeTab } = location.state || {}; // lấy giá trị activeTab
+		if (activeTab) {
+			setActiveTab(activeTab);
+		}
+	}, [location.state]);
 
 	const fetchRecords = useCallback(async () => {
 		try {
@@ -69,27 +85,27 @@ const DoctorDashboard = () => {
 		}
 	}, [fetchRecords, user]);
 
-	useEffect(() => {
-		const fetchUpcomingAppointments = async () => {
-			try {
-				const response = await apiGetUpcomingAppointments(user?._id);
-				if (!response.success) {
-					Swal.fire({
-						icon: "error",
-						title: "Lỗi",
-						text: response.message || "Không thể lấy hồ sơ y tế.",
-					});
-					return;
-				}
-				setUpcomingAppointments(response.data);
-			} catch (error) {
-				console.error("Error fetching upcoming appointments:", error);
+	const fetchUpcomingAppointments = useCallback(async () => {
+		try {
+			const response = await apiGetUpcomingAppointments(user?._id);
+			if (!response.success) {
+				Swal.fire({
+					icon: "error",
+					title: "Lỗi",
+					text: response.message || "Không thể lấy hồ sơ y tế.",
+				});
+				return;
 			}
-		};
+			setUpcomingAppointments(response.data);
+		} catch (error) {
+			console.error("Error fetching upcoming appointments:", error);
+		}
+	}, [user?._id]);
+	useEffect(() => {
 		if (user?._id) {
 			fetchUpcomingAppointments();
 		}
-	}, [user]);
+	}, [fetchUpcomingAppointments, user]);
 
 	if (!user || user?.role !== "doctor") {
 		return (
@@ -128,7 +144,6 @@ const DoctorDashboard = () => {
 					?.toLowerCase()
 					.includes(searchTerm.toLowerCase())
 			);
-			// record.patientId._id === selectedPatient;
 		}
 		return (
 			record.patientId._id === selectedPatient &&
@@ -153,6 +168,52 @@ const DoctorDashboard = () => {
 					.includes(searchTerm.toLowerCase()))
 		);
 	});
+
+	const handleViewRecord = (record) => {
+		setSelectedRecord(record);
+		setShowDetailRecord(true);
+	};
+
+	const handleEditRecord = (record) => {
+		setSelectedRecord(record);
+		setIsEditing(true);
+	};
+
+	const handleSave = (updatedRecord) => {
+		Swal.fire({
+			icon: "success",
+			title: "Cập nhật thành công",
+			text: "Hồ sơ y tế đã được cập nhật thành công.",
+		});
+		setRecords((prev) =>
+			prev.map((rec) =>
+				rec._id === updatedRecord._id ? updatedRecord : rec
+			)
+		);
+		fetchRecords();
+		fetchUpcomingAppointments();
+		setIsEditing(false);
+	};
+
+	const handleCancel = () => {
+		setIsEditing(false);
+	};
+
+	const handleViewDetailPatient = (patient) => {
+		setSelectedPatient(patient);
+		setShowDetailPatient(true);
+	};
+
+	const getStatusText = (status) => {
+		switch (status) {
+			case "completed":
+				return "Đã hoàn thành";
+			case "ongoing":
+				return "Đang theo dõi";
+			default:
+				return "Đang theo dõi";
+		}
+	};
 
 	const StatCard = ({
 		// eslint-disable-next-line no-unused-vars
@@ -179,23 +240,26 @@ const DoctorDashboard = () => {
 	);
 
 	const PatientCard = ({ patient }) => (
-		<div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 hover:shadow-md transition-shadow">
+		<div
+			className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 hover:shadow-lg transition-shadow cursor-pointer"
+			onClick={() => handleViewDetailPatient(patient)}>
 			<div className="flex items-center justify-between">
 				<div className="flex items-center space-x-3">
-					<div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
-						<User className="w-5 h-5 text-blue-600" />
+					<div className="w-14 h-14 bg-blue-100 rounded-full flex items-center justify-center">
+						<User className="w-7 h-7 text-blue-600" />
 					</div>
 					<div>
 						<h3 className="font-medium text-gray-900">
 							{patient.name}
 						</h3>
+						<p className="text-sm text-gray-500">{patient.email}</p>
 						<p className="text-sm text-gray-500">
 							{patient.phoneNumber}
 						</p>
 					</div>
 				</div>
 				<button className="text-blue-600 hover:text-blue-800">
-					<ChevronRight className="w-5 h-5" />
+					<ChevronRight className="w-7 h-7" />
 				</button>
 			</div>
 		</div>
@@ -219,20 +283,31 @@ const DoctorDashboard = () => {
 					</p>
 					<div className="flex items-center space-x-4 text-sm text-gray-500">
 						<span>Thuốc: {record.medication}</span>
+					</div>
+					<div className="flex items-center space-x-4 text-sm text-gray-500">
+						<span>
+							Trạng thái hồ sơ: {getStatusText(record.status)}
+						</span>
 						<span className="text-red-600">
 							Tái khám:{" "}
-							{moment(record.dateBack).format("DD/MM/YYYY")}
+							{record.dateBack
+								? moment(record.dateBack).format("DD/MM/YYYY")
+								: "Không có"}
 						</span>
 					</div>
 				</div>
 				<div className="flex space-x-2">
-					<button className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg">
+					<button
+						className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg cursor-pointer"
+						onClick={() => handleViewRecord(record)}>
 						<Eye className="w-4 h-4" />
 					</button>
-					<button className="p-2 text-green-600 hover:bg-green-50 rounded-lg">
+					<button
+						className="p-2 text-green-600 hover:bg-green-50 rounded-lg cursor-pointer"
+						onClick={() => handleEditRecord(record)}>
 						<Edit className="w-4 h-4" />
 					</button>
-					<button className="p-2 text-purple-600 hover:bg-purple-50 rounded-lg">
+					<button className="p-2 text-purple-600 hover:bg-purple-50 rounded-lg cursor-pointer">
 						<Shield className="w-4 h-4" />
 					</button>
 				</div>
@@ -247,7 +322,7 @@ const DoctorDashboard = () => {
 					<h3 className="font-medium text-gray-900">
 						{appointment.patientId.name}
 					</h3>
-					<p className="text-sm text-gray-600 font-medium">
+					<p className="text-sm text-gray-600 font-medium my-1">
 						Chẩn đoán: {appointment.diagnosis}
 					</p>
 					<p className="text-sm text-blue-600">
@@ -516,6 +591,30 @@ const DoctorDashboard = () => {
 					onSuccess={fetchRecords}
 					existingPatients={patients}
 					doctorId={user?._id}
+				/>
+			)}
+			{showDetailRecord && (
+				<DetailRecord
+					record={selectedRecord}
+					isOpen={showDetailRecord}
+					onClose={() => setShowDetailRecord(false)}
+				/>
+			)}
+			{isEditing && selectedRecord && (
+				<MedicalRecordEditor
+					record={selectedRecord}
+					onSave={handleSave}
+					onCancel={handleCancel}
+				/>
+			)}
+			{showDetailPatient && (
+				<PatientDetailModal
+					patient={selectedPatient}
+					isOpen={showDetailPatient}
+					onClose={() => {
+						setShowDetailPatient(false);
+						setSelectedPatient("");
+					}}
 				/>
 			)}
 		</div>

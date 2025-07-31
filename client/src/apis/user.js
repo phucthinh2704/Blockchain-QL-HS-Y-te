@@ -15,3 +15,9 @@ export const apiUpdateUser = async (userId, data) =>
 		data,
 		withCredentials: true,
 	});
+export const apiGetAllUsers = async () =>
+	axios({
+		method: "GET",
+		url: `/users`,
+		withCredentials: true,
+	});

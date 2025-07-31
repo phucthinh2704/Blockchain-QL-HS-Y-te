@@ -52,6 +52,20 @@ export const apiGetRecordByDoctor = async (doctorId) => {
 	}
 };
 
+export const apiGetAllRecordsByAdmin = async (params) => {
+	try {
+		const response = await axios({
+			method: "GET",
+			url: "/medical",
+			params
+		});
+		return response;
+	} catch (error) {
+		console.error("Error in apiGetAllRecordsByAdmin:", error);
+		throw error;
+	}
+}
+
 export const apiCreateMedicalRecord = async (data) => {
 	try {
 		const response = await axios({
@@ -62,6 +76,20 @@ export const apiCreateMedicalRecord = async (data) => {
 		return response;
 	} catch (error) {
 		console.error("Error in apiCreateMedicalRecord:", error);
+		throw error;
+	}
+};
+
+export const apiUpdateMedicalRecord = async (id, data) => {
+	try {
+		const response = await axios({
+			method: "PUT",
+			url: `/medical/${id}`,
+			data,
+		});
+		return response;
+	} catch (error) {
+		console.error("Error in apiUpdateMedicalRecord:", error);
 		throw error;
 	}
 };

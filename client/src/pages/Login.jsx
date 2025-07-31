@@ -11,7 +11,7 @@ import {
 	Stethoscope,
 	User,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Swal from "sweetalert2";
 import { apiRegister } from "../apis/user";
 import { apiLogin } from "../apis/auth";
@@ -29,7 +29,7 @@ const MedicalAuthSystem = () => {
 
 	// Login state
 	const [loginData, setLoginData] = useState({
-		email: "thinh@gmail.com",
+		email: "admin@gmail.com",
 		password: "123456",
 	});
 
@@ -45,7 +45,11 @@ const MedicalAuthSystem = () => {
 
 	const [errors, setErrors] = useState({});
 
-	const { user } = useAuth(); // Get user from Auth Context
+	useEffect(() => {
+		document.title = "Đăng nhập/Đăng ký";
+	}, [])
+
+	const { user } = useAuth(); 
 	if (user) {
 		return (
 			<Navigate
@@ -212,7 +216,7 @@ const MedicalAuthSystem = () => {
 				<div className="flex bg-gray-100 rounded-xl p-1 mb-6">
 					<button
 						onClick={() => setIsLogin(true)}
-						className={`flex-1 py-2 px-4 rounded-lg text-sm font-medium transition-all ${
+						className={`flex-1 py-2 px-4 rounded-lg text-sm font-medium transition-all cursor-pointer ${
 							isLogin
 								? "bg-white text-blue-600 shadow-sm"
 								: "text-gray-600 hover:text-gray-900"
@@ -221,7 +225,7 @@ const MedicalAuthSystem = () => {
 					</button>
 					<button
 						onClick={() => setIsLogin(false)}
-						className={`flex-1 py-2 px-4 rounded-lg text-sm font-medium transition-all ${
+						className={`flex-1 py-2 px-4 rounded-lg text-sm font-medium transition-all cursor-pointer ${
 							!isLogin
 								? "bg-white text-blue-600 shadow-sm"
 								: "text-gray-600 hover:text-gray-900"
@@ -327,7 +331,7 @@ const MedicalAuthSystem = () => {
 								type="button"
 								onClick={handleLogin}
 								disabled={loading}
-								className="w-full bg-gradient-to-r from-blue-600 to-cyan-600 text-white py-3 px-4 rounded-lg font-medium hover:from-blue-700 hover:to-cyan-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg">
+								className="w-full bg-gradient-to-r from-blue-600 to-cyan-600 text-white py-3 px-4 rounded-lg font-medium hover:from-blue-700 hover:to-cyan-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shadow-lg">
 								{loading ? (
 									<div className="flex items-center justify-center">
 										<div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></div>

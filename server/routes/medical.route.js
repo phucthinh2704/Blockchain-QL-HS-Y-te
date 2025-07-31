@@ -123,7 +123,7 @@ router.put(
 	async (req, res) => {
 		try {
 			const { id } = req.params;
-			const { diagnosis, treatment, medication, doctorNote, dateBack } =
+			const { diagnosis, treatment, medication, doctorNote, dateBack, status } =
 				req.body;
 
 			// Validate dateBack if provided
@@ -149,6 +149,7 @@ router.put(
 			if (medication !== undefined) updateData.medication = medication;
 			if (doctorNote !== undefined) updateData.doctorNote = doctorNote;
 			if (dateBack !== undefined) updateData.dateBack = parsedDateBack;
+			if (status !== undefined) updateData.status = status;
 
 			const record = await MedicalRecord.findByIdAndUpdate(
 				id,
@@ -282,7 +283,8 @@ router.get(
 			}
 
 			const records = await MedicalRecord.find({ doctorId })
-				.populate("patientId", "name email phoneNumber dateOfBirth")
+				.populate("patientId", "-password")
+				.populate("doctorId", "-password")
 				.sort({ createdAt: -1 });
 
 			res.json({
@@ -554,7 +556,7 @@ router.delete(
 router.get("/", authenticateToken, authorize(["admin"]), async (req, res) => {
 	try {
 		const page = parseInt(req.query.page) || 1;
-		const limit = parseInt(req.query.limit) || 10;
+		const limit = parseInt(req.query.limit) || 9999;
 		const skip = (page - 1) * limit;
 
 		const total = await MedicalRecord.countDocuments();
@@ -657,7 +659,9 @@ router.get(
 		try {
 			const { doctorId } = req.params;
 
-			const appointments = await MedicalRecord.getUpcomingAppointments(doctorId);
+			const appointments = await MedicalRecord.getUpcomingAppointments(
+				doctorId
+			);
 
 			res.json({
 				success: true,
@@ -674,5 +678,36 @@ router.get(
 		}
 	}
 );
+
+// 13. Share medical record with another doctor or user
+router.post("/:id/share", async (req, res) => {
+	const user = req.user;
+	const { userId, role } = req.body;
+
+	const record = await MedicalRecord.findById(req.params.id);
+	if (!record)
+		return res.status(404).json({ message: "Không tìm thấy hồ sơ" });
+
+	if (record.patientId.toString() !== user._id) {
+		return res
+			.status(403)
+			.json({ message: "Bạn không có quyền chia sẻ hồ sơ này" });
+	}
+
+	// Không thêm trùng
+	const alreadyShared = record.sharedWith.some(
+		(entry) => entry.userId.toString() === userId
+	);
+	if (alreadyShared) {
+		return res
+			.status(400)
+			.json({ message: "Người này đã được chia sẻ rồi" });
+	}
+
+	record.sharedWith.push({ userId, role: role || "read" });
+	await record.save();
+
+	res.json({ message: "Đã chia sẻ hồ sơ", record });
+});
 
 module.exports = router;

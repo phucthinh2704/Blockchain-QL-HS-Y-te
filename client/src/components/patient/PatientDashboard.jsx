@@ -433,6 +433,17 @@ const PatientDashboard = () => {
 		}
 	};
 
+	const getStatusText = (status) => {
+		switch (status) {
+			case "completed":
+				return "Đã hoàn thành";
+			case "ongoing":
+				return "Đang theo dõi";
+			default:
+				return "Trạng thái không xác định";
+		}
+	};
+
 	return (
 		<div className="min-h-screen bg-gray-50 p-4">
 			<div className="max-w-6xl mx-auto">
@@ -545,6 +556,16 @@ const PatientDashboard = () => {
 																<span className="ml-2 text-gray-600">
 																	{
 																		record.treatment
+																	}
+																</span>
+															</div>
+															<div>
+																<span className="font-medium text-gray-700">
+																	Trạng thái hồ sơ:
+																</span>
+																<span className="ml-2 text-gray-600">
+																	{
+																		getStatusText(record.status)
 																	}
 																</span>
 															</div>
@@ -1651,6 +1672,10 @@ const PatientDashboard = () => {
 																		{formatDate(
 																			record.dateBack
 																		)}
+																	</p>
+																	<p className="text-sm text-gray-600 mt-2">
+																		Trạng thái hồ sơ:{" "}
+																		{getStatusText(record.status)}
 																	</p>
 																</div>
 															</div>

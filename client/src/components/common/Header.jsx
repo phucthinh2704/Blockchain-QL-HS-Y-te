@@ -2,7 +2,16 @@
 import React, { useState } from "react";
 import useAuth from "../../hooks/useAuth";
 import { useNavigate } from "react-router-dom";
-import { Activity, User, LogOut, Settings, ChevronDown } from "lucide-react";
+import {
+	Activity,
+	User,
+	LogOut,
+	Settings,
+	ChevronDown,
+	FileText,
+	Users,
+	Calendar,
+} from "lucide-react";
 import Swal from "sweetalert2";
 
 const Header = () => {
@@ -47,6 +56,61 @@ const Header = () => {
 		setShowDropdown(false);
 		navigate("/", { state: { activeTab: "medical-records" } });
 	};
+	const handleOverviewClick = () => {
+		setShowDropdown(false);
+		navigate("/doctors", { state: { activeTab: "dashboard" } });
+	};
+	const handleMedicalDoctorClick = () => {
+		setShowDropdown(false);
+		navigate("/doctors", { state: { activeTab: "records" } });
+	};
+	const handlePatientClick = () => {
+		setShowDropdown(false);
+		navigate("/doctors", { state: { activeTab: "patients" } });
+	};
+	const handleAppointmentsClick = () => {
+		setShowDropdown(false);
+		navigate("/doctors", { state: { activeTab: "appointments" } });
+	};
+
+	const userDropdown = [
+		{
+			label: "Hồ sơ cá nhân",
+			onClick: handleProfileClick,
+			icon: User,
+		},
+		{
+			label: "Hồ sơ y tế",
+			onClick: handleMedicalClick,
+			icon: Activity,
+		},
+	];
+
+	const doctorDropdown = [
+		{
+			label: "Tổng quan",
+			onClick: handleOverviewClick,
+			icon: Activity,
+		},
+		{
+			label: "Hồ sơ y tế",
+			onClick: handleMedicalDoctorClick,
+			icon: FileText,
+		},
+		{
+			label: "Bệnh nhân",
+			onClick: handlePatientClick,
+			icon: Users,
+		},
+		{
+			label: "Lịch hẹn",
+			onClick: handleAppointmentsClick,
+			icon: Calendar,
+		},
+	];
+
+	const dropdownItems =
+		user?.role === "doctor" ? doctorDropdown : userDropdown;
 
 	return (
 		<header className="bg-white shadow-sm border-b border-gray-200">
@@ -79,7 +143,8 @@ const Header = () => {
 								</div>
 								<div className="hidden md:block text-left">
 									<p className="text-sm font-medium text-gray-900">
-										{user?.role === "doctor" ? "BS. " : ""} {user?.name || "Người dùng"}
+										{user?.role === "doctor" ? "BS. " : ""}{" "}
+										{user?.name || "Người dùng"}
 									</p>
 									<p className="text-xs text-gray-500">
 										{user?.email || "user@example.com"}
@@ -106,19 +171,22 @@ const Header = () => {
 											</p>
 										</div>
 
-										<button
-											onClick={handleMedicalClick}
-											className="flex items-center w-full px-4 py-3 text-sm text-gray-700 hover:bg-gray-100 transition-colors duration-200 cursor-pointer">
-											<Activity className="w-4 h-4 mr-3 text-gray-500" />
-											Hồ sơ y tế
-										</button>
+										{dropdownItems.map((item, index) => (
+											<button
+												key={index}
+												onClick={item.onClick}
+												className="flex items-center w-full px-4 py-3 text-sm text-gray-700 hover:bg-gray-100 transition-colors duration-200 cursor-pointer">
+												<item.icon className="w-4 h-4 mr-3 text-gray-500" />
+												{item.label}
+											</button>
+										))}
 
-										<button
+										{/* <button
 											onClick={handleProfileClick}
 											className="flex items-center w-full px-4 py-3 text-sm text-gray-700 hover:bg-gray-100 transition-colors duration-200 cursor-pointer">
 											<User className="w-4 h-4 mr-3 text-gray-500" />
 											Hồ sơ cá nhân
-										</button>
+										</button> */}
 
 										<div className="border-t border-gray-100">
 											<button

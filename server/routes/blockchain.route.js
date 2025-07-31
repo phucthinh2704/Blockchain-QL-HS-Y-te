@@ -37,18 +37,29 @@ router.get(
 	async (req, res) => {
 		try {
 			const totalBlocks = await Block.countDocuments();
-			const latestBlock = await Block.getLatestBlock();
+			const latestBlock = await Block.findOne().sort({ index: -1 });
 			const genesisBlock = await Block.findOne({ index: 0 });
+
+			// Quick integrity check
+			const verification = await MedicalRecord.verifyBlockchain();
 
 			res.json({
 				success: true,
 				data: {
 					totalBlocks,
+					validBlocks: verification.valid
+						? totalBlocks
+						: totalBlocks - 1, // Simplified
+					invalidBlocks: verification.valid ? 0 : 1, // Simplified
+					integrityPercentage: verification.valid ? 100 : 95, // Simplified
+					networkStatus: verification.valid ? "healthy" : "warning",
+					lastBlockTime: latestBlock?.timestamp,
 					latestBlock: latestBlock
 						? {
 								index: latestBlock.index,
 								timestamp: latestBlock.timestamp,
 								hash: latestBlock.hash,
+								action: latestBlock.data.action,
 						  }
 						: null,
 					genesisBlock: genesisBlock
@@ -58,6 +69,8 @@ router.get(
 								hash: genesisBlock.hash,
 						  }
 						: null,
+					chainValid: verification.valid,
+					verificationMessage: verification.message,
 				},
 			});
 		} catch (error) {
@@ -126,7 +139,7 @@ router.get(
 router.get(
 	"/block/:blockIndex",
 	authenticateToken,
-	authorize(["patient","doctor", "admin"]),
+	authorize(["patient", "doctor", "admin"]),
 	async (req, res) => {
 		try {
 			const { blockIndex } = req.params;
@@ -175,20 +188,43 @@ router.get(
 	async (req, res) => {
 		try {
 			const page = parseInt(req.query.page) || 1;
-			const limit = parseInt(req.query.limit) || 10;
+			const limit = parseInt(req.query.limit) || 20;
 			const skip = (page - 1) * limit;
+			const sortBy = req.query.sortBy || "index";
+			const sortOrder = req.query.sortOrder === "asc" ? 1 : -1;
 
 			const total = await Block.countDocuments();
 			const blocks = await Block.find()
 				.populate("data.patientId", "name email")
 				.populate("data.doctorId", "name email")
-				.sort({ index: -1 }) // Mới nhất trước
+				.populate("data.updatedBy", "name email")
+				.sort({ [sortBy]: sortOrder })
 				.skip(skip)
 				.limit(limit);
 
+			// Add validation status for each block
+			const blocksWithValidation = await Promise.all(
+				blocks.map(async (block) => {
+					const calculatedHash = Block.calculateHash(
+						block.index,
+						block.timestamp,
+						block.data,
+						block.previousHash
+					);
+
+					const isValid = block.hash === calculatedHash;
+
+					return {
+						...block.toObject(),
+						isValid,
+						calculatedHash: isValid ? null : calculatedHash, // Only show if different
+					};
+				})
+			);
+
 			res.json({
 				success: true,
-				data: blocks,
+				data: blocksWithValidation,
 				pagination: {
 					current: page,
 					pages: Math.ceil(total / limit),
@@ -982,6 +1018,634 @@ router.get(
 					process.env.NODE_ENV === "development"
 						? error.stack
 						: undefined,
+			});
+		}
+	}
+);
+
+// 13. Xác thực toàn bộ blockchain (Enhanced version)
+router.get(
+	"/verify/full",
+	authenticateToken,
+	authorize(["doctor", "admin"]),
+	async (req, res) => {
+		try {
+			const startTime = Date.now();
+
+			// Lấy tất cả blocks theo thứ tự index
+			const blocks = await Block.find().sort({ index: 1 });
+
+			if (blocks.length === 0) {
+				return res.json({
+					success: true,
+					message: "Không có blocks nào để xác thực",
+					data: {
+						valid: true,
+						totalBlocks: 0,
+						validBlocks: 0,
+						invalidBlocks: 0,
+						integrityPercentage: 100,
+						details: [],
+						executionTime: Date.now() - startTime,
+					},
+				});
+			}
+
+			const verificationDetails = [];
+			let invalidBlocksCount = 0;
+			let genesisBlockValid = true;
+
+			for (let i = 0; i < blocks.length; i++) {
+				const currentBlock = blocks[i];
+				let blockValid = true;
+				const issues = [];
+
+				// 1. Verify hash integrity
+				const calculatedHash = Block.calculateHash(
+					currentBlock.index,
+					currentBlock.timestamp,
+					currentBlock.data,
+					currentBlock.previousHash
+				);
+
+				const hashValid = currentBlock.hash === calculatedHash;
+				if (!hashValid) {
+					blockValid = false;
+					issues.push("Hash không hợp lệ");
+				}
+
+				// 2. Verify previous hash chain (skip genesis block)
+				let previousHashValid = true;
+				if (i === 0) {
+					// Genesis block - previous hash should be "0"
+					if (currentBlock.previousHash !== "0") {
+						genesisBlockValid = false;
+						blockValid = false;
+						issues.push("Genesis block previous hash không hợp lệ");
+					}
+				} else {
+					const previousBlock = blocks[i - 1];
+					if (currentBlock.previousHash !== previousBlock.hash) {
+						previousHashValid = false;
+						blockValid = false;
+						issues.push("Previous hash không khớp");
+					}
+				}
+
+				// 3. Verify index sequence
+				const expectedIndex = i;
+				if (currentBlock.index !== expectedIndex) {
+					blockValid = false;
+					issues.push(
+						`Index không đúng thứ tự (expected: ${expectedIndex}, actual: ${currentBlock.index})`
+					);
+				}
+
+				// 4. Verify medical record exists (if not deleted)
+				let recordExists = true;
+				if (currentBlock.data.action !== "delete") {
+					const record = await MedicalRecord.findById(
+						currentBlock.data.recordId
+					);
+					if (!record) {
+						recordExists = false;
+						blockValid = false;
+						issues.push("Medical record không tồn tại");
+					}
+				}
+
+				if (!blockValid) {
+					invalidBlocksCount++;
+				}
+
+				verificationDetails.push({
+					blockIndex: currentBlock.index,
+					hash: currentBlock.hash.substring(0, 16) + "...",
+					timestamp: currentBlock.timestamp,
+					action: currentBlock.data.action,
+					diagnosis: currentBlock.data.diagnosis,
+					isValid: blockValid,
+					hashValid,
+					previousHashValid,
+					recordExists,
+					issues: issues.length > 0 ? issues : ["Hợp lệ"],
+				});
+			}
+
+			const totalBlocks = blocks.length;
+			const validBlocks = totalBlocks - invalidBlocksCount;
+			const integrityPercentage =
+				totalBlocks > 0
+					? Math.round((validBlocks / totalBlocks) * 100)
+					: 100;
+			const overallValid = invalidBlocksCount === 0 && genesisBlockValid;
+
+			const result = {
+				valid: overallValid,
+				message: overallValid
+					? `Blockchain hoàn toàn hợp lệ (${totalBlocks} blocks)`
+					: `Phát hiện ${invalidBlocksCount} blocks không hợp lệ`,
+				totalBlocks,
+				validBlocks,
+				invalidBlocks: invalidBlocksCount,
+				integrityPercentage,
+				genesisBlockValid,
+				details: verificationDetails,
+				executionTime: Date.now() - startTime,
+				lastBlockHash: blocks[blocks.length - 1]?.hash,
+				chainLength: totalBlocks,
+			};
+
+			res.json({
+				success: true,
+				data: result,
+			});
+		} catch (error) {
+			console.error("Error in full blockchain verification:", error);
+			res.status(500).json({
+				success: false,
+				message: "Lỗi xác thực blockchain",
+				error: error.message,
+			});
+		}
+	}
+);
+
+// 14. Xác thực blockchain với phân trang (cho admin interface)
+router.get(
+	"/verify/paginated",
+	authenticateToken,
+	authorize(["admin"]),
+	async (req, res) => {
+		try {
+			const page = parseInt(req.query.page) || 1;
+			const limit = parseInt(req.query.limit) || 50;
+			const skip = (page - 1) * limit;
+
+			const totalBlocks = await Block.countDocuments();
+			const blocks = await Block.find()
+				.sort({ index: 1 })
+				.skip(skip)
+				.limit(limit);
+
+			const verificationResults = [];
+
+			for (const block of blocks) {
+				const calculatedHash = Block.calculateHash(
+					block.index,
+					block.timestamp,
+					block.data,
+					block.previousHash
+				);
+
+				const hashValid = block.hash === calculatedHash;
+
+				// Verify previous hash
+				let previousHashValid = true;
+				if (block.index > 0) {
+					const previousBlock = await Block.findOne({
+						index: block.index - 1,
+					});
+					if (
+						!previousBlock ||
+						block.previousHash !== previousBlock.hash
+					) {
+						previousHashValid = false;
+					}
+				}
+
+				verificationResults.push({
+					blockIndex: block.index,
+					timestamp: block.timestamp,
+					hash: block.hash,
+					hashValid,
+					previousHashValid,
+					isValid: hashValid && previousHashValid,
+					action: block.data.action,
+					recordId: block.data.recordId,
+				});
+			}
+
+			res.json({
+				success: true,
+				data: {
+					blocks: verificationResults,
+					pagination: {
+						current: page,
+						pages: Math.ceil(totalBlocks / limit),
+						total: totalBlocks,
+						limit,
+					},
+				},
+			});
+		} catch (error) {
+			console.error("Error in paginated verification:", error);
+			res.status(500).json({
+				success: false,
+				message: "Lỗi xác thực blockchain",
+				error: error.message,
+			});
+		}
+	}
+);
+
+// 15. Thống kê blockchain chi tiết
+router.get(
+	"/stats",
+	authenticateToken,
+	authorize(["admin"]),
+	async (req, res) => {
+		try {
+			const totalBlocks = await Block.countDocuments();
+			const latestBlock = await Block.findOne().sort({ index: -1 });
+			const genesisBlock = await Block.findOne({ index: 0 });
+
+			// Thống kê theo action
+			const actionStats = await Block.aggregate([
+				{
+					$group: {
+						_id: "$data.action",
+						count: { $sum: 1 },
+					},
+				},
+			]);
+
+			// Thống kê theo ngày (7 ngày gần nhất)
+			const sevenDaysAgo = new Date();
+			sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+			const dailyStats = await Block.aggregate([
+				{
+					$match: {
+						timestamp: { $gte: sevenDaysAgo },
+					},
+				},
+				{
+					$group: {
+						_id: {
+							$dateToString: {
+								format: "%Y-%m-%d",
+								date: "$timestamp",
+							},
+						},
+						count: { $sum: 1 },
+					},
+				},
+				{
+					$sort: { _id: 1 },
+				},
+			]);
+
+			// Thống kê theo bác sĩ (top 10)
+			const doctorStats = await Block.aggregate([
+				{
+					$group: {
+						_id: "$data.doctorId",
+						count: { $sum: 1 },
+					},
+				},
+				{
+					$lookup: {
+						from: "users",
+						localField: "_id",
+						foreignField: "_id",
+						as: "doctor",
+					},
+				},
+				{
+					$unwind: "$doctor",
+				},
+				{
+					$project: {
+						doctorName: "$doctor.name",
+						doctorEmail: "$doctor.email",
+						count: 1,
+					},
+				},
+				{
+					$sort: { count: -1 },
+				},
+				{
+					$limit: 10,
+				},
+			]);
+
+			// Kiểm tra tính toàn vẹn tổng quan
+			const quickVerification = await MedicalRecord.verifyBlockchain();
+
+			const stats = {
+				totalBlocks,
+				networkStatus: quickVerification.valid
+					? "healthy"
+					: "compromised",
+				integrityPercentage: quickVerification.valid ? 100 : 0,
+				latestBlock: latestBlock
+					? {
+							index: latestBlock.index,
+							timestamp: latestBlock.timestamp,
+							hash: latestBlock.hash.substring(0, 12) + "...",
+							action: latestBlock.data.action,
+					  }
+					: null,
+				genesisBlock: genesisBlock
+					? {
+							timestamp: genesisBlock.timestamp,
+							hash: genesisBlock.hash.substring(0, 12) + "...",
+					  }
+					: null,
+				actionDistribution: actionStats.reduce((acc, stat) => {
+					acc[stat._id] = stat.count;
+					return acc;
+				}, {}),
+				dailyActivity: dailyStats,
+				topDoctors: doctorStats,
+				chainLength: totalBlocks,
+				avgBlocksPerDay:
+					totalBlocks > 0 && latestBlock
+						? Math.round(
+								totalBlocks /
+									Math.max(
+										1,
+										Math.ceil(
+											(Date.now() -
+												new Date(
+													genesisBlock?.timestamp ||
+														Date.now()
+												)) /
+												(1000 * 60 * 60 * 24)
+										)
+									)
+						  )
+						: 0,
+			};
+
+			res.json({
+				success: true,
+				data: stats,
+			});
+		} catch (error) {
+			console.error("Error getting blockchain stats:", error);
+			res.status(500).json({
+				success: false,
+				message: "Lỗi lấy thống kê blockchain",
+				error: error.message,
+			});
+		}
+	}
+);
+
+// 16. Sửa chữa blockchain (admin only - cực kỳ nguy hiểm)
+router.post(
+	"/repair",
+	authenticateToken,
+	authorize(["admin"]),
+	async (req, res) => {
+		try {
+			const { confirmPassword, repairType } = req.body;
+
+			// Thêm validation password admin ở đây
+			if (!confirmPassword) {
+				return res.status(400).json({
+					success: false,
+					message:
+						"Cần xác nhận mật khẩu để thực hiện sửa chữa blockchain",
+				});
+			}
+
+			const repairResults = [];
+
+			if (repairType === "recalculate_hashes") {
+				// Tính lại hash cho tất cả blocks
+				const blocks = await Block.find().sort({ index: 1 });
+
+				for (let i = 0; i < blocks.length; i++) {
+					const block = blocks[i];
+					const correctHash = Block.calculateHash(
+						block.index,
+						block.timestamp,
+						block.data,
+						block.previousHash
+					);
+
+					if (block.hash !== correctHash) {
+						await Block.findByIdAndUpdate(block._id, {
+							hash: correctHash,
+						});
+						repairResults.push({
+							blockIndex: block.index,
+							oldHash: block.hash,
+							newHash: correctHash,
+							status: "repaired",
+						});
+					}
+				}
+			} else if (repairType === "rebuild_chain") {
+				// Xây dựng lại toàn bộ chain
+				const blocks = await Block.find().sort({ index: 1 });
+
+				for (let i = 0; i < blocks.length; i++) {
+					const block = blocks[i];
+					const previousHash = i === 0 ? "0" : blocks[i - 1].hash;
+
+					const correctHash = Block.calculateHash(
+						block.index,
+						block.timestamp,
+						block.data,
+						previousHash
+					);
+
+					await Block.findByIdAndUpdate(block._id, {
+						previousHash,
+						hash: correctHash,
+					});
+
+					repairResults.push({
+						blockIndex: block.index,
+						previousHash,
+						hash: correctHash,
+						status: "rebuilt",
+					});
+				}
+			}
+
+			res.json({
+				success: true,
+				message: `Blockchain đã được sửa chữa thành công (${repairType})`,
+				data: {
+					repairsCount: repairResults.length,
+					repairs: repairResults,
+				},
+			});
+		} catch (error) {
+			console.error("Error repairing blockchain:", error);
+			res.status(500).json({
+				success: false,
+				message: "Lỗi sửa chữa blockchain",
+				error: error.message,
+			});
+		}
+	}
+);
+
+// 17. Export blockchain data
+router.get(
+	"/export",
+	authenticateToken,
+	authorize(["admin"]),
+	async (req, res) => {
+		try {
+			const format = req.query.format || "json";
+			const includeData = req.query.includeData !== "false";
+
+			const blocks = await Block.find()
+				.populate("data.patientId", "name email")
+				.populate("data.doctorId", "name email")
+				.sort({ index: 1 });
+
+			let exportData;
+
+			if (includeData) {
+				exportData = blocks.map((block) => ({
+					index: block.index,
+					timestamp: block.timestamp,
+					hash: block.hash,
+					previousHash: block.previousHash,
+					data: {
+						...block.data,
+						patientInfo: block.data.patientId
+							? {
+									name: block.data.patientId.name,
+									email: block.data.patientId.email,
+							  }
+							: null,
+						doctorInfo: block.data.doctorId
+							? {
+									name: block.data.doctorId.name,
+									email: block.data.doctorId.email,
+							  }
+							: null,
+					},
+				}));
+			} else {
+				exportData = blocks.map((block) => ({
+					index: block.index,
+					timestamp: block.timestamp,
+					hash: block.hash,
+					previousHash: block.previousHash,
+					action: block.data.action,
+				}));
+			}
+
+			if (format === "csv") {
+				// Convert to CSV format
+				const csvData = exportData.map((block) => ({
+					Index: block.index,
+					Timestamp: block.timestamp,
+					Hash: block.hash,
+					PreviousHash: block.previousHash,
+					Action: block.data?.action || block.action,
+				}));
+
+				res.setHeader("Content-Type", "text/csv");
+				res.setHeader(
+					"Content-Disposition",
+					"attachment; filename=blockchain_export.csv"
+				);
+
+				// Simple CSV conversion
+				const csvString = [
+					Object.keys(csvData[0]).join(","),
+					...csvData.map((row) => Object.values(row).join(",")),
+				].join("\n");
+
+				return res.send(csvString);
+			}
+
+			res.json({
+				success: true,
+				data: {
+					exportedAt: new Date(),
+					totalBlocks: exportData.length,
+					format,
+					includeData,
+					blocks: exportData,
+				},
+			});
+		} catch (error) {
+			console.error("Error exporting blockchain:", error);
+			res.status(500).json({
+				success: false,
+				message: "Lỗi export blockchain",
+				error: error.message,
+			});
+		}
+	}
+);
+
+// 18. Tìm kiếm blocks theo tiêu chí
+router.get(
+	"/search",
+	authenticateToken,
+	authorize(["admin", "doctor"]),
+	async (req, res) => {
+		try {
+			const {
+				action,
+				patientId,
+				doctorId,
+				diagnosis,
+				fromDate,
+				toDate,
+				hashPattern,
+				page = 1,
+				limit = 20,
+			} = req.query;
+
+			const skip = (parseInt(page) - 1) * parseInt(limit);
+			const query = {};
+
+			// Build search query
+			if (action) query["data.action"] = action;
+			if (patientId) query["data.patientId"] = patientId;
+			if (doctorId) query["data.doctorId"] = doctorId;
+			if (diagnosis)
+				query["data.diagnosis"] = { $regex: diagnosis, $options: "i" };
+			if (hashPattern)
+				query.hash = { $regex: hashPattern, $options: "i" };
+
+			if (fromDate || toDate) {
+				query.timestamp = {};
+				if (fromDate) query.timestamp.$gte = new Date(fromDate);
+				if (toDate) query.timestamp.$lte = new Date(toDate);
+			}
+
+			const total = await Block.countDocuments(query);
+			const blocks = await Block.find(query)
+				.populate("data.patientId", "name email")
+				.populate("data.doctorId", "name email")
+				.populate("data.updatedBy", "name email")
+				.sort({ index: -1 })
+				.skip(skip)
+				.limit(parseInt(limit));
+
+			res.json({
+				success: true,
+				data: {
+					blocks,
+					pagination: {
+						current: parseInt(page),
+						pages: Math.ceil(total / parseInt(limit)),
+						total,
+						limit: parseInt(limit),
+					},
+				},
+			});
+		} catch (error) {
+			console.error("Error searching blocks:", error);
+			res.status(500).json({
+				success: false,
+				message: "Lỗi tìm kiếm blocks",
+				error: error.message,
 			});
 		}
 	}

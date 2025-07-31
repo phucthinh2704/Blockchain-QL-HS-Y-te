@@ -54,3 +54,16 @@ export const apiGetDetailBlockByIndex = async (index) => {
       throw error;
    }
 }
+
+export const apiGetBlockchainByAdmin = async () => {
+   try {
+      const response = await axios({
+         method: "GET",
+         url: `/blockchain/blocks`,
+      });
+      return response;
+   } catch (error) {
+      console.error("Error in apiGetBlockchainByAdmin:", error);
+      throw error;
+   }
+}

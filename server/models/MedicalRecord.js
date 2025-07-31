@@ -21,6 +21,17 @@ const medicalRecordSchema = new mongoose.Schema(
 		doctorNote: String, // Thêm trường ghi chú của bác sĩ
 		treatment: String,
 		dateBack: Date, // Ngày hẹn tái khám
+		// shareWith: [
+		// 	{
+		// 		type: mongoose.Schema.Types.ObjectId,
+		// 		ref: "User",
+		// 	},
+		// ],
+		status: {
+			type: String,
+			enum: ["completed", "ongoing"],
+			default: "ongoing",
+		},
 		blockchainHash: {
 			type: String,
 			required: false, // sẽ gán trong middleware
@@ -53,6 +64,7 @@ medicalRecordSchema.post("save", async function (doc, next) {
 					medication: doc.medication, // Thêm medication vào block data
 					doctorNote: doc.doctorNote, // Thêm doctorNote vào block data
 					dateBack: doc.dateBack, // Thêm dateBack vào block data
+					status: doc.status, // Thêm status vào block data
 					action: "create",
 				},
 				previousHash: previousHash,
@@ -147,8 +159,8 @@ medicalRecordSchema.methods.getBlockchainHistory = async function () {
 	try {
 		const blocks = await Block.find({
 			"data.recordId": this._id,
-		}).sort({ index: 1 }).populate("data.updatedBy", "name email");;
-
+		}).sort({ index: 1 }).populate("data.updatedBy", "name email").populate("data.patientId", "name email").populate("data.doctorId", "name email");
+		
 		return blocks.map((block) => ({
 			blockIndex: block.index,
 			timestamp: block.timestamp,
@@ -167,15 +179,6 @@ medicalRecordSchema.methods.getBlockchainHistory = async function () {
 		console.error("Error getting blockchain history:", err);
 		return [];
 	}
-};
-
-// Method để tìm kiếm theo medication
-medicalRecordSchema.statics.findByMedication = async function (
-	medicationQuery
-) {
-	return this.find({
-		medication: { $regex: medicationQuery, $options: "i" },
-	}).populate("patientId doctorId");
 };
 
 // Method để lấy các hẹn tái khám sắp tới
