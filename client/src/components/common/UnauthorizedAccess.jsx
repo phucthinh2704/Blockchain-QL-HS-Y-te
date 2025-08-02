@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ExclamationCircleIcon } from '@heroicons/react/24/solid'; // Cần cài đặt @heroicons/react
+import { memo } from 'react';
 
 const UnauthorizedAccess = ({ user, allowedRole }) => {
     const navigate = useNavigate();
@@ -43,4 +44,4 @@ const UnauthorizedAccess = ({ user, allowedRole }) => {
     );
 };
 
-export default UnauthorizedAccess;
+export default memo(UnauthorizedAccess);

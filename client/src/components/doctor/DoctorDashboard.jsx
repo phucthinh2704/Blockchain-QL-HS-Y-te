@@ -12,20 +12,20 @@ import {
 	User,
 	Users,
 } from "lucide-react";
+import moment from "moment";
 import { useCallback, useEffect, useState } from "react";
-import useAuth from "../../hooks/useAuth";
-import UnauthorizedAccess from "../common/UnauthorizedAccess";
+import { useLocation } from "react-router-dom";
+import Swal from "sweetalert2";
 import {
 	apiGetRecordByDoctor,
 	apiGetUpcomingAppointments,
 } from "../../apis/record";
-import Swal from "sweetalert2";
+import useAuth from "../../hooks/useAuth";
+import UnauthorizedAccess from "../common/UnauthorizedAccess";
 import CreateMedicalRecordForm from "./CreateMedicalRecordForm";
-import moment from "moment";
 import DetailRecord from "./DetailRecord";
 import MedicalRecordEditor from "./MedicalRecordEditor";
 import PatientDetailModal from "./PatientDetailModal";
-import { useLocation } from "react-router-dom";
 
 const DoctorDashboard = () => {
 	const [activeTab, setActiveTab] = useState("dashboard");

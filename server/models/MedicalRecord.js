@@ -1,5 +1,7 @@
 const mongoose = require("mongoose");
-const Block = require("./Block"); // Import block model
+const Block = require("./Block");
+require("dotenv").config();
+const createCryptoHash = require("../utils/createCryptoHash");
 
 const medicalRecordSchema = new mongoose.Schema(
 	{
@@ -17,16 +19,10 @@ const medicalRecordSchema = new mongoose.Schema(
 			type: String,
 			required: true,
 		},
-		medication: String, // Thêm trường medication
-		doctorNote: String, // Thêm trường ghi chú của bác sĩ
+		medication: String,
+		doctorNote: String,
 		treatment: String,
-		dateBack: Date, // Ngày hẹn tái khám
-		// shareWith: [
-		// 	{
-		// 		type: mongoose.Schema.Types.ObjectId,
-		// 		ref: "User",
-		// 	},
-		// ],
+		dateBack: Date,
 		status: {
 			type: String,
 			enum: ["completed", "ongoing"],
@@ -34,37 +30,43 @@ const medicalRecordSchema = new mongoose.Schema(
 		},
 		blockchainHash: {
 			type: String,
-			required: false, // sẽ gán trong middleware
+			required: false,
 		},
 		blockIndex: {
 			type: Number,
-			required: false, // sẽ gán trong middleware, lưu index của block để dễ tham chiếu
+			required: false,
+		},
+		idHash: {
+			type: String,
+			required: false,
+		},
+		recordHash: {
+			type: String,
+			required: false,
 		},
 	},
 	{ timestamps: true }
 );
 
-// MIDDLEWARE tạo block sau khi thêm MedicalRecord
+// ============= MIDDLEWARE CẬP NHẬT =============
 medicalRecordSchema.post("save", async function (doc, next) {
 	if (doc.isNew || !doc.blockchainHash) {
 		try {
 			const latestBlock = await Block.findOne().sort({ index: -1 });
 			const previousHash = latestBlock ? latestBlock.hash : "0";
+			const idHash = createCryptoHash(doc._id.toString());
 
-			// Tạo block với tất cả các trường mới
+			// QUAN TRỌNG: Populate để có đầy đủ thông tin
+			await doc.populate([
+				{ path: "patientId", select: "_id" },
+				{ path: "doctorId", select: "_id" },
+			]);
+
 			const newBlock = new Block({
 				index: latestBlock ? latestBlock.index + 1 : 0,
 				timestamp: new Date(),
 				data: {
-					recordId: doc._id,
-					patientId: doc.patientId,
-					doctorId: doc.doctorId,
-					diagnosis: doc.diagnosis,
-					treatment: doc.treatment,
-					medication: doc.medication, // Thêm medication vào block data
-					doctorNote: doc.doctorNote, // Thêm doctorNote vào block data
-					dateBack: doc.dateBack, // Thêm dateBack vào block data
-					status: doc.status, // Thêm status vào block data
+					recordId: idHash,
 					action: "create",
 				},
 				previousHash: previousHash,
@@ -79,6 +81,27 @@ medicalRecordSchema.post("save", async function (doc, next) {
 
 			await newBlock.save();
 
+			// Tính recordHash với cấu trúc nhất quán
+			const recordData = {
+				recordId: doc._id,
+				patientId: doc.patientId._id, // Đảm bảo lấy _id
+				doctorId: doc.doctorId._id, // Đảm bảo lấy _id
+				diagnosis: doc.diagnosis,
+				treatment: doc.treatment,
+				medication: doc.medication,
+				doctorNote: doc.doctorNote,
+				dateBack: doc.dateBack,
+				status: doc.status,
+				action: "create",
+			};
+
+			const recordHash = Block.calculateHash(
+				newBlock.index,
+				newBlock.timestamp,
+				recordData,
+				newBlock.previousHash
+			);
+
 			console.log(
 				`✅ Block ${newBlock.index} created for medical record ${doc._id}`
 			);
@@ -86,6 +109,8 @@ medicalRecordSchema.post("save", async function (doc, next) {
 			await doc.updateOne({
 				blockchainHash: newBlock.hash,
 				blockIndex: newBlock.index,
+				idHash,
+				recordHash: recordHash,
 			});
 		} catch (err) {
 			console.error("Lỗi khi tạo block:", err);
@@ -94,7 +119,42 @@ medicalRecordSchema.post("save", async function (doc, next) {
 	next();
 });
 
-// Method để verify blockchain integrity
+// ============= HÀM GETBLOCKCHAINHISTORY TỐI ƯU =============
+medicalRecordSchema.methods.getBlockchainHistory = async function () {
+	try {
+		const recordId = this._id.toString();
+		const idHash = createCryptoHash(recordId);
+
+		// Query bằng hash (nhanh hơn query string dài)
+		const blocks = await Block.find({
+			"data.recordId": idHash,
+		})
+			.sort({ index: 1 })
+			.populate("data.updatedBy", "name email")
+			.select("index timestamp hash data") // Chỉ select fields cần thiết
+			.lean();
+
+		return blocks.map((block) => ({
+			blockIndex: block.index,
+			timestamp: block.timestamp,
+			hash: block.hash,
+			action: block.data.action || "UNKNOWN",
+			data: block.data,
+			updatedBy: block.data.updatedBy
+				? {
+						_id: block.data.updatedBy._id,
+						name: block.data.updatedBy.name,
+						email: block.data.updatedBy.email,
+				  }
+				: null,
+		}));
+	} catch (err) {
+		console.error("Error getting blockchain history:", err);
+		return [];
+	}
+};
+
+// ============= CÁC METHODS KHÁC GIỮ NGUYÊN =============
 medicalRecordSchema.statics.verifyBlockchain = async function () {
 	try {
 		const blocks = await Block.find().sort({ index: 1 });
@@ -110,7 +170,6 @@ medicalRecordSchema.statics.verifyBlockchain = async function () {
 		for (let i = 0; i < blocks.length; i++) {
 			const currentBlock = blocks[i];
 
-			// Kiểm tra hash của block hiện tại
 			const calculatedHash = Block.calculateHash(
 				currentBlock.index,
 				currentBlock.timestamp,
@@ -127,7 +186,6 @@ medicalRecordSchema.statics.verifyBlockchain = async function () {
 				};
 			}
 
-			// Kiểm tra liên kết với block trước (bỏ qua block đầu tiên)
 			if (i > 0) {
 				const previousBlock = blocks[i - 1];
 				if (currentBlock.previousHash !== previousBlock.hash) {
@@ -154,34 +212,6 @@ medicalRecordSchema.statics.verifyBlockchain = async function () {
 	}
 };
 
-// Method để lấy lịch sử của một medical record
-medicalRecordSchema.methods.getBlockchainHistory = async function () {
-	try {
-		const blocks = await Block.find({
-			"data.recordId": this._id,
-		}).sort({ index: 1 }).populate("data.updatedBy", "name email").populate("data.patientId", "name email").populate("data.doctorId", "name email");
-		
-		return blocks.map((block) => ({
-			blockIndex: block.index,
-			timestamp: block.timestamp,
-			hash: block.hash,
-			action: block.data.action || "UNKNOWN",
-			data: block.data,
-			updatedBy: block.data.updatedBy
-				? {
-						_id: block.data.updatedBy._id,
-						name: block.data.updatedBy.name,
-						email: block.data.updatedBy.email,
-				  }
-				: null,
-		}));
-	} catch (err) {
-		console.error("Error getting blockchain history:", err);
-		return [];
-	}
-};
-
-// Method để lấy các hẹn tái khám sắp tới
 medicalRecordSchema.statics.getUpcomingAppointments = async function (
 	doctorId = null
 ) {
@@ -202,12 +232,99 @@ medicalRecordSchema.statics.getUpcomingAppointments = async function (
 		.sort({ dateBack: 1 });
 };
 
-// Virtual để check xem có hẹn tái khám hay không
 medicalRecordSchema.virtual("hasFollowUp").get(function () {
 	return this.dateBack && this.dateBack > new Date();
 });
 
-// Ensure virtual fields are serialized
 medicalRecordSchema.set("toJSON", { virtuals: true });
+
+// ============= BONUS: METHOD UPDATE RECORD =============
+// Thêm method để update record và tạo block mới
+medicalRecordSchema.methods.updateWithBlockchain = async function (
+	updateData,
+	updatedBy
+) {
+	try {
+		// Update record TRƯỚC
+		Object.assign(this, updateData);
+		await this.save();
+
+		// QUAN TRỌNG: Populate để đảm bảo có đầy đủ thông tin
+		await this.populate([
+			{ path: "patientId", select: "_id" },
+			{ path: "doctorId", select: "_id" },
+		]);
+
+		// Tạo block cho update
+		const latestBlock = await Block.findOne().sort({ index: -1 });
+		const previousHash = latestBlock ? latestBlock.hash : "0";
+		const idHash = createCryptoHash(this._id.toString());
+
+		const newBlock = new Block({
+			index: latestBlock ? latestBlock.index + 1 : 0,
+			timestamp: new Date(),
+			data: {
+				recordId: idHash,
+				action: "update",
+				updatedBy: updatedBy,
+			},
+			previousHash: previousHash,
+		});
+
+		newBlock.hash = Block.calculateHash(
+			newBlock.index,
+			newBlock.timestamp,
+			newBlock.data,
+			newBlock.previousHash
+		);
+
+		await newBlock.save();
+
+		// Tính recordHash với cấu trúc GIỐNG HỆT như trong verify route
+		const recordData = {
+			recordId: this._id,
+			patientId: this.patientId._id, // Đảm bảo lấy _id
+			doctorId: this.doctorId._id, // Đảm bảo lấy _id
+			diagnosis: this.diagnosis,
+			treatment: this.treatment,
+			medication: this.medication,
+			doctorNote: this.doctorNote,
+			dateBack: this.dateBack,
+			status: this.status,
+			action: "update",
+			updatedBy: updatedBy, // Thêm updatedBy vào data
+		};
+
+		const recordHash = Block.calculateHash(
+			newBlock.index,
+			newBlock.timestamp,
+			recordData,
+			newBlock.previousHash
+		);
+
+		console.log(
+			`✅ Update block ${newBlock.index} created for medical record ${this._id}`
+		);
+
+		// Update record với hash mới
+		await this.updateOne({
+			blockchainHash: newBlock.hash,
+			blockIndex: newBlock.index,
+			idHash: idHash,
+			recordHash: recordHash,
+		});
+
+		// Update giá trị trong memory để đồng bộ
+		this.blockchainHash = newBlock.hash;
+		this.blockIndex = newBlock.index;
+		this.idHash = idHash;
+		this.recordHash = recordHash;
+
+		return this;
+	} catch (err) {
+		console.error("Error updating with blockchain:", err);
+		throw err;
+	}
+};
 
 module.exports = mongoose.model("MedicalRecord", medicalRecordSchema);

@@ -13,6 +13,7 @@ import {
 	Calendar,
 } from "lucide-react";
 import Swal from "sweetalert2";
+import { memo } from "react";
 
 const Header = () => {
 	const { user, logout } = useAuth();
@@ -215,4 +216,4 @@ const Header = () => {
 	);
 };
 
-export default Header;
+export default memo(Header);

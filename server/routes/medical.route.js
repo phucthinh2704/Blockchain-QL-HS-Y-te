@@ -165,51 +165,15 @@ router.put(
 					message: "Không tìm thấy hồ sơ y tế",
 				});
 			}
-
-			// Tạo block cho việc update
-			try {
-				const latestBlock = await Block.findOne().sort({ index: -1 });
-				const previousHash = latestBlock ? latestBlock.hash : "0";
-				const newIndex = latestBlock ? latestBlock.index + 1 : 0;
-
-				const updateBlock = new Block({
-					index: newIndex,
-					timestamp: new Date(),
-					data: {
-						recordId: record._id,
-						patientId: record.patientId._id || record.patientId,
-						doctorId: record.doctorId._id || record.doctorId,
-						diagnosis: record.diagnosis,
-						treatment: record.treatment,
-						medication: record.medication,
-						doctorNote: record.doctorNote,
-						dateBack: record.dateBack,
-						action: "update",
-						updatedBy: req.user.userId, // Người thực hiện cập nhật
-					},
-					previousHash: previousHash,
+			const newRecord = await record.updateWithBlockchain(
+				updateData,
+				req.user.userId // Người thực hiện cập nhật
+			);
+			if (!newRecord) {
+				return res.status(500).json({
+					success: false,
+					message: "Lỗi cập nhật hồ sơ y tế",
 				});
-
-				updateBlock.hash = Block.calculateHash(
-					updateBlock.index,
-					updateBlock.timestamp,
-					updateBlock.data,
-					updateBlock.previousHash
-				);
-
-				await updateBlock.save();
-
-				await record.updateOne({
-					blockchainHash: updateBlock.hash,
-					blockIndex: updateBlock.index,
-				});
-
-				console.log(
-					`✅ Update block ${newIndex} created for medical record ${record._id}`
-				);
-			} catch (blockError) {
-				console.error("Error creating update block:", blockError);
-				// Continue with response even if blockchain fails
 			}
 
 			return res.status(200).json({

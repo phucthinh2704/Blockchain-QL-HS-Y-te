@@ -5,6 +5,7 @@ import {
 	Shield,
 	Users
 } from "lucide-react";
+import { memo } from "react";
 const Sidebar = ({ activeTab, setActiveTab, blockchainStats }) => (
 		<div className="fixed left-0 top-0 h-full w-64 bg-gradient-to-b from-blue-900 to-blue-800 text-white shadow-2xl z-30">
 			<div className="p-6 border-b border-blue-700">
@@ -58,4 +59,4 @@ const Sidebar = ({ activeTab, setActiveTab, blockchainStats }) => (
 			</div>
 		</div>
 	);
-	export default Sidebar;
+	export default memo(Sidebar);

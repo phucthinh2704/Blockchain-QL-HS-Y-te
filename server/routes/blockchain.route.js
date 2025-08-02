@@ -3,6 +3,7 @@ const router = express.Router();
 const { authenticateToken, authorize } = require("../middlewares/auth");
 const Block = require("../models/Block");
 const MedicalRecord = require("../models/MedicalRecord");
+const createCryptoHash = require("../utils/createCryptoHash");
 
 // 1. Xác thực tính toàn vẹn blockchain (chỉ admin và doctor)
 router.get(
@@ -373,7 +374,6 @@ router.get(
 	async (req, res) => {
 		try {
 			const { recordId } = req.params;
-
 			// Kiểm tra medical record có tồn tại không
 			const medicalRecord = await MedicalRecord.findById(recordId);
 			if (!medicalRecord) {
@@ -396,7 +396,7 @@ router.get(
 
 			// Lấy block tương ứng với medical record
 			const block = await Block.findOne({
-				"data.recordId": recordId,
+				"data.recordId": medicalRecord.idHash,
 			}).sort({ index: -1 });
 			if (!block) {
 				return res.status(404).json({
@@ -408,18 +408,20 @@ router.get(
 			// Tính lại hash và so sánh
 			const data = {
 				recordId: medicalRecord._id,
-				patientId: medicalRecord.patientId,
-				doctorId: medicalRecord.doctorId,
+				patientId: medicalRecord.patientId._id,
+				doctorId: medicalRecord.doctorId._id,
 				diagnosis: medicalRecord.diagnosis,
 				treatment: medicalRecord.treatment,
 				medication: medicalRecord.medication,
 				doctorNote: medicalRecord.doctorNote,
 				dateBack: medicalRecord.dateBack,
+				status: medicalRecord.status,
 				action: block.data.action, // Lấy action từ block
 			};
 			if (block.data.action === "update") {
 				data.updatedBy = block.data.updatedBy; // Chỉ thêm updatedBy nếu action là update
 			}
+
 			const calculatedHash = Block.calculateHash(
 				block.index,
 				block.timestamp,
@@ -427,9 +429,7 @@ router.get(
 				block.previousHash
 			);
 
-			const isValid =
-				calculatedHash === medicalRecord.blockchainHash &&
-				calculatedHash === block.hash;
+			const isValid = calculatedHash === medicalRecord.recordHash;
 			res.json({
 				success: true,
 				message: "Kết quả xác thực hồ sơ y tế",
@@ -473,17 +473,70 @@ router.get(
 				});
 			}
 
-			// QUAN TRỌNG: Lấy blocks KHÔNG populate để giữ nguyên dữ liệu gốc cho việc tính hash
+			// Lấy tất cả medical records của bệnh nhân để có danh sách recordId cần tìm
+			const medicalRecords = await MedicalRecord.find({
+				patientId: patientId,
+			})
+				.select("_id idHash")
+				.lean();
+
+			if (medicalRecords.length === 0) {
+				return res.json({
+					success: true,
+					message: "Bệnh nhân này không có hồ sơ y tế nào",
+					data: {
+						patientId,
+						totalBlocks: 0,
+						verificationResults: [],
+						errorBlocks: [], // Thêm danh sách blocks lỗi
+						overallValid: true,
+						statistics: {
+							totalBlocks: 0,
+							validBlocks: 0,
+							invalidBlocks: 0,
+							validityPercentage: 100,
+							errorsByType: {}, // Thống kê lỗi theo loại
+						},
+					},
+				});
+			}
+
+			// Tạo danh sách recordId hashes để tìm blocks
+			const recordHashes = medicalRecords
+				.filter((record) => record.idHash) // Chỉ lấy records có idHash
+				.map((record) => record.idHash);
+
+			if (recordHashes.length === 0) {
+				return res.json({
+					success: true,
+					message: "Không có blocks nào được tìm thấy cho bệnh nhân này",
+					data: {
+						patientId,
+						totalBlocks: 0,
+						verificationResults: [],
+						errorBlocks: [],
+						overallValid: true,
+						statistics: {
+							totalBlocks: 0,
+							validBlocks: 0,
+							invalidBlocks: 0,
+							validityPercentage: 100,
+							errorsByType: {},
+						},
+					},
+				});
+			}
+
+			// Lấy blocks KHÔNG populate để giữ nguyên dữ liệu gốc cho việc tính hash
 			const patientBlocks = await Block.find({
-				"data.patientId": patientId,
+				"data.recordId": { $in: recordHashes },
 			}).sort({ index: 1 });
 
-			// Sau đó lấy thêm thông tin populated riêng để hiển thị
+			// Lấy blocks với populate để hiển thị thông tin
 			const patientBlocksWithPopulate = await Block.find({
-				"data.patientId": patientId,
+				"data.recordId": { $in: recordHashes },
 			})
-				.populate("data.doctorId", "name email")
-				.populate("data.recordId")
+				.populate("data.updatedBy", "name email")
 				.sort({ index: 1 });
 
 			if (patientBlocks.length === 0) {
@@ -494,30 +547,51 @@ router.get(
 						patientId,
 						totalBlocks: 0,
 						verificationResults: [],
+						errorBlocks: [],
 						overallValid: true,
+						statistics: {
+							totalBlocks: 0,
+							validBlocks: 0,
+							invalidBlocks: 0,
+							validityPercentage: 100,
+							errorsByType: {},
+						},
 					},
 				});
 			}
 
 			const verificationResults = [];
+			const errorBlocks = []; // Danh sách blocks có lỗi
+			const errorsByType = {}; // Thống kê lỗi theo loại
 			let overallValid = true;
 			let invalidBlocksCount = 0;
 
 			// Xác thực từng block của bệnh nhân
 			for (let i = 0; i < patientBlocks.length; i++) {
-				const currentBlock = patientBlocks[i]; // Dùng block KHÔNG populate
-				const currentBlockWithPopulate = patientBlocksWithPopulate[i]; // Dùng cho hiển thị
+				const currentBlock = patientBlocks[i]; // Block KHÔNG populate
+				const currentBlockWithPopulate = patientBlocksWithPopulate[i]; // Block có populate
 
-				// Tạo raw data object để tính hash - đảm bảo format giống lúc tạo block
+				// Tìm medical record tương ứng với block
+				const correspondingRecord = medicalRecords.find(
+					(record) => record.idHash === currentBlock.data.recordId
+				);
+
+				// Lấy thông tin chi tiết medical record để hiển thị
+				let recordDetails = null;
+				if (correspondingRecord) {
+					recordDetails = await MedicalRecord.findById(
+						correspondingRecord._id
+					)
+						.populate("doctorId", "name email")
+						.select(
+							"diagnosis treatment medication doctorNote dateBack status"
+						)
+						.lean();
+				}
+
+				// Tạo raw data object để tính hash - chỉ với các trường cần thiết
 				const rawData = {
 					recordId: currentBlock.data.recordId,
-					patientId: currentBlock.data.patientId,
-					doctorId: currentBlock.data.doctorId,
-					diagnosis: currentBlock.data.diagnosis,
-					treatment: currentBlock.data.treatment,
-					medication: currentBlock.data.medication,
-					doctorNote: currentBlock.data.doctorNote,
-					dateBack: currentBlock.data.dateBack,
 					action: currentBlock.data.action,
 				};
 
@@ -530,7 +604,7 @@ router.get(
 				const calculatedHash = Block.calculateHash(
 					currentBlock.index,
 					currentBlock.timestamp,
-					rawData, // Sử dụng raw data thay vì currentBlock.data
+					rawData,
 					currentBlock.previousHash
 				);
 
@@ -539,64 +613,157 @@ router.get(
 				// Kiểm tra tính liên kết với blockchain chính
 				let isPreviousHashValid = true;
 				let expectedPreviousHash = null;
+				let previousBlockInfo = null;
 
 				if (currentBlock.index > 0) {
 					// Lấy block trước đó trong blockchain chính (không populate)
 					const previousBlock = await Block.findOne({
 						index: currentBlock.index - 1,
-					});
+					})
+						.select("hash index timestamp data.action")
+						.lean();
 
 					if (previousBlock) {
 						expectedPreviousHash = previousBlock.hash;
 						isPreviousHashValid =
 							currentBlock.previousHash === previousBlock.hash;
+						previousBlockInfo = {
+							index: previousBlock.index,
+							hash: previousBlock.hash.substring(0, 12) + "...",
+							action: previousBlock.data?.action || "unknown",
+						};
 					} else {
 						isPreviousHashValid = false;
 						expectedPreviousHash = "Block trước không tồn tại";
 					}
+				} else {
+					// Genesis block - previous hash should be "0"
+					isPreviousHashValid = currentBlock.previousHash === "0";
+					expectedPreviousHash = "0";
 				}
 
 				const blockValid = isHashValid && isPreviousHashValid;
 
+				// Thu thập các lỗi cụ thể
+				const issues = [];
+				const errorTypes = [];
+
+				if (!isHashValid) {
+					issues.push("Hash không hợp lệ - Dữ liệu có thể đã bị thay đổi");
+					errorTypes.push("INVALID_HASH");
+				}
+
+				if (!isPreviousHashValid) {
+					issues.push("Previous hash không hợp lệ - Blockchain bị đứt gãy");
+					errorTypes.push("INVALID_PREVIOUS_HASH");
+				}
+
+				if (!recordDetails) {
+					issues.push("Medical record không tồn tại - Dữ liệu tham chiếu bị mất");
+					errorTypes.push("MISSING_RECORD");
+				}
+
+				// Thống kê lỗi theo loại
+				errorTypes.forEach(errorType => {
+					errorsByType[errorType] = (errorsByType[errorType] || 0) + 1;
+				});
+
 				if (!blockValid) {
 					overallValid = false;
 					invalidBlocksCount++;
+
+					// Thêm vào danh sách blocks lỗi
+					errorBlocks.push({
+						blockIndex: currentBlock.index,
+						recordId: currentBlock.data.recordId,
+						timestamp: currentBlock.timestamp,
+						action: currentBlock.data.action,
+						diagnosis: recordDetails?.diagnosis || "N/A",
+						errorTypes: errorTypes,
+						errorMessages: issues,
+						severity: errorTypes.includes("INVALID_HASH") ? "HIGH" : 
+								 errorTypes.includes("INVALID_PREVIOUS_HASH") ? "MEDIUM" : "LOW",
+						
+						// Chi tiết lỗi hash
+						hashDetails: !isHashValid ? {
+							stored: currentBlock.hash,
+							calculated: calculatedHash,
+							diff: currentBlock.hash !== calculatedHash
+						} : null,
+
+						// Chi tiết lỗi previous hash
+						previousHashDetails: !isPreviousHashValid ? {
+							stored: currentBlock.previousHash,
+							expected: expectedPreviousHash,
+							previousBlockExists: !!previousBlockInfo
+						} : null
+					});
 				}
 
-				verificationResults.push({
+				// Tạo kết quả verification cho block này
+				const verificationResult = {
 					blockIndex: currentBlock.index,
 					recordId: currentBlock.data.recordId,
 					timestamp: currentBlock.timestamp,
 					action: currentBlock.data.action,
-					diagnosis: currentBlock.data.diagnosis,
-					doctorInfo: currentBlockWithPopulate.data.doctorId
+
+					// Thông tin medical record tương ứng
+					recordInfo: recordDetails
 						? {
-								id: currentBlockWithPopulate.data.doctorId._id,
-								name: currentBlockWithPopulate.data.doctorId
+								diagnosis: recordDetails.diagnosis,
+								treatment: recordDetails.treatment,
+								medication: recordDetails.medication,
+								doctorNote: recordDetails.doctorNote,
+								dateBack: recordDetails.dateBack,
+								status: recordDetails.status,
+								doctorInfo: recordDetails.doctorId
+									? {
+											id: recordDetails.doctorId._id,
+											name: recordDetails.doctorId.name,
+											email: recordDetails.doctorId.email,
+									  }
+									: null,
+						  }
+						: null,
+
+					// Thông tin người update (nếu có)
+					updatedBy: currentBlockWithPopulate.data.updatedBy
+						? {
+								id: currentBlockWithPopulate.data.updatedBy._id,
+								name: currentBlockWithPopulate.data.updatedBy
 									.name,
-								email: currentBlockWithPopulate.data.doctorId
+								email: currentBlockWithPopulate.data.updatedBy
 									.email,
 						  }
 						: null,
+
+					// Kết quả validation
 					isValid: blockValid,
+					severity: !blockValid ? (errorTypes.includes("INVALID_HASH") ? "HIGH" : 
+							 errorTypes.includes("INVALID_PREVIOUS_HASH") ? "MEDIUM" : "LOW") : null,
+
+					// Chi tiết verification hash
 					hashVerification: {
 						isValid: isHashValid,
 						storedHash: currentBlock.hash,
 						calculatedHash: calculatedHash,
 						rawDataUsed: rawData, // Debug info
 					},
+
+					// Chi tiết verification previous hash
 					previousHashVerification: {
 						isValid: isPreviousHashValid,
 						storedPreviousHash: currentBlock.previousHash,
 						expectedPreviousHash: expectedPreviousHash,
+						previousBlockInfo: previousBlockInfo,
 					},
-					issues: [
-						...(!isHashValid ? ["Hash không hợp lệ"] : []),
-						...(!isPreviousHashValid
-							? ["Previous hash không hợp lệ"]
-							: []),
-					],
-				});
+
+					// Danh sách lỗi (nếu có)
+					issues: issues,
+					errorTypes: errorTypes,
+				};
+
+				verificationResults.push(verificationResult);
 			}
 
 			// Tính toán thống kê
@@ -612,49 +779,134 @@ router.get(
 									100
 						  )
 						: 100,
+				totalMedicalRecords: medicalRecords.length,
+				blocksPerRecord:
+					patientBlocks.length > 0
+						? Math.round(
+								(patientBlocks.length / medicalRecords.length) *
+									100
+						  ) / 100
+						: 0,
+				errorsByType: errorsByType, // Thống kê lỗi theo loại
 			};
+
+			// Tạo summary thông tin với focus vào lỗi
+			const summary = {
+				firstBlock:
+					verificationResults.length > 0
+						? {
+								index: verificationResults[0].blockIndex,
+								timestamp: verificationResults[0].timestamp,
+								action: verificationResults[0].action,
+								diagnosis:
+									verificationResults[0].recordInfo
+										?.diagnosis || "N/A",
+								isValid: verificationResults[0].isValid,
+						  }
+						: null,
+
+				lastBlock:
+					verificationResults.length > 0
+						? {
+								index: verificationResults[
+									verificationResults.length - 1
+								].blockIndex,
+								timestamp:
+									verificationResults[
+										verificationResults.length - 1
+									].timestamp,
+								action: verificationResults[
+									verificationResults.length - 1
+								].action,
+								diagnosis:
+									verificationResults[
+										verificationResults.length - 1
+									].recordInfo?.diagnosis || "N/A",
+								isValid: verificationResults[verificationResults.length - 1].isValid,
+						  }
+						: null,
+
+				timespan:
+					verificationResults.length > 1
+						? {
+								from: verificationResults[0].timestamp,
+								to: verificationResults[
+									verificationResults.length - 1
+								].timestamp,
+								duration:
+									Math.ceil(
+										(new Date(
+											verificationResults[
+												verificationResults.length - 1
+											].timestamp
+										) -
+											new Date(
+												verificationResults[0].timestamp
+											)) /
+											(1000 * 60 * 60 * 24)
+									) + " ngày",
+						  }
+						: null,
+
+				// Thống kê theo action
+				actionBreakdown: verificationResults.reduce((acc, result) => {
+					acc[result.action] = (acc[result.action] || 0) + 1;
+					return acc;
+				}, {}),
+
+				// Thống kê lỗi chi tiết
+				errorSummary: {
+					totalErrors: invalidBlocksCount,
+					highSeverityErrors: errorBlocks.filter(block => block.severity === "HIGH").length,
+					mediumSeverityErrors: errorBlocks.filter(block => block.severity === "MEDIUM").length,
+					lowSeverityErrors: errorBlocks.filter(block => block.severity === "LOW").length,
+					errorTypes: errorsByType,
+					criticalBlocks: errorBlocks
+						.filter(block => block.severity === "HIGH")
+						.map(block => ({
+							index: block.blockIndex,
+							diagnosis: block.diagnosis,
+							timestamp: block.timestamp
+						}))
+				}
+			};
+
+			// Tạo message phù hợp với thông tin lỗi cụ thể
+			let message;
+			if (overallValid) {
+				message = `Tất cả ${statistics.totalBlocks} blocks của bệnh nhân đều hợp lệ`;
+			} else {
+				const errorSummary = [];
+				if (errorsByType.INVALID_HASH) {
+					errorSummary.push(`${errorsByType.INVALID_HASH} block(s) có hash lỗi`);
+				}
+				if (errorsByType.INVALID_PREVIOUS_HASH) {
+					errorSummary.push(`${errorsByType.INVALID_PREVIOUS_HASH} block(s) có previous hash lỗi`);
+				}
+				if (errorsByType.MISSING_RECORD) {
+					errorSummary.push(`${errorsByType.MISSING_RECORD} block(s) thiếu medical record`);
+				}
+				
+				message = `Phát hiện ${statistics.invalidBlocks}/${statistics.totalBlocks} blocks không hợp lệ: ${errorSummary.join(", ")}`;
+			}
 
 			res.json({
 				success: true,
-				message: overallValid
-					? "Tất cả blocks của bệnh nhân đều hợp lệ"
-					: "Có blocks không hợp lệ được phát hiện",
+				message: message,
 				data: {
 					patientId,
 					overallValid,
 					statistics,
 					verificationResults,
-					summary: {
-						firstBlock:
-							verificationResults.length > 0
-								? {
-										index: verificationResults[0]
-											.blockIndex,
-										timestamp:
-											verificationResults[0].timestamp,
-								  }
-								: null,
-						lastBlock:
-							verificationResults.length > 0
-								? {
-										index: verificationResults[
-											verificationResults.length - 1
-										].blockIndex,
-										timestamp:
-											verificationResults[
-												verificationResults.length - 1
-											].timestamp,
-								  }
-								: null,
-						timespan:
-							verificationResults.length > 1
-								? {
-										from: verificationResults[0].timestamp,
-										to: verificationResults[
-											verificationResults.length - 1
-										].timestamp,
-								  }
-								: null,
+					errorBlocks, // Danh sách blocks lỗi chi tiết
+					summary,
+					metadata: {
+						verificationTime: new Date().toISOString(),
+						totalMedicalRecords: medicalRecords.length,
+						recordsWithBlocks: recordHashes.length,
+						avgBlocksPerRecord: statistics.blocksPerRecord,
+						hasErrors: !overallValid,
+						errorCount: invalidBlocksCount,
 					},
 				},
 			});
@@ -664,12 +916,959 @@ router.get(
 				success: false,
 				message: "Lỗi xác thực blocks của bệnh nhân",
 				error: error.message,
+				stack:
+					process.env.NODE_ENV === "development"
+						? error.stack
+						: undefined,
 			});
 		}
 	}
 );
 
 // 11. Xác thực blocks của bệnh nhân với lọc theo khoảng thời gian
+// router.get(
+// 	"/patient/:patientId/verify/timerange",
+// 	authenticateToken,
+// 	authorize(["patient", "doctor", "admin"]),
+// 	async (req, res) => {
+// 		try {
+// 			const { patientId } = req.params;
+// 			const { startDate, endDate } = req.query;
+
+// 			// Patient chỉ xem blocks của chính họ
+// 			if (req.user.role === "patient" && patientId !== req.user.userId) {
+// 				return res.status(403).json({
+// 					success: false,
+// 					message: "Không có quyền truy cập blocks này",
+// 				});
+// 			}
+
+// 			// Validate và parse date parameters
+// 			let dateQuery = {};
+// 			let parsedStartDate = null;
+// 			let parsedEndDate = null;
+
+// 			if (startDate || endDate) {
+// 				dateQuery.timestamp = {};
+
+// 				if (startDate) {
+// 					try {
+// 						parsedStartDate = new Date(startDate);
+// 						if (isNaN(parsedStartDate.getTime())) {
+// 							return res.status(400).json({
+// 								success: false,
+// 								message: "Ngày bắt đầu không hợp lệ",
+// 							});
+// 						}
+// 						// Set to start of day
+// 						parsedStartDate.setHours(0, 0, 0, 0);
+// 						dateQuery.timestamp.$gte = parsedStartDate;
+// 					} catch (error) {
+// 						return res.status(400).json({
+// 							success: false,
+// 							message: "Format ngày bắt đầu không đúng",
+// 						});
+// 					}
+// 				}
+
+// 				if (endDate) {
+// 					try {
+// 						parsedEndDate = new Date(endDate);
+// 						if (isNaN(parsedEndDate.getTime())) {
+// 							return res.status(400).json({
+// 								success: false,
+// 								message: "Ngày kết thúc không hợp lệ",
+// 							});
+// 						}
+// 						// Set to end of day
+// 						parsedEndDate.setHours(23, 59, 59, 999);
+// 						dateQuery.timestamp.$lte = parsedEndDate;
+// 					} catch (error) {
+// 						return res.status(400).json({
+// 							success: false,
+// 							message: "Format ngày kết thúc không đúng",
+// 						});
+// 					}
+// 				}
+
+// 				// Validate date range logic
+// 				if (
+// 					parsedStartDate &&
+// 					parsedEndDate &&
+// 					parsedStartDate > parsedEndDate
+// 				) {
+// 					return res.status(400).json({
+// 						success: false,
+// 						message: "Ngày bắt đầu không thể sau ngày kết thúc",
+// 					});
+// 				}
+// 			}
+
+// 			// Lấy tất cả medical records của bệnh nhân để có danh sách recordId cần tìm
+// 			const medicalRecords = await MedicalRecord.find({
+// 				patientId: patientId,
+// 			})
+// 				.select("_id idHash createdAt updatedAt")
+// 				.lean();
+
+// 			if (medicalRecords.length === 0) {
+// 				const timeRangeText =
+// 					parsedStartDate && parsedEndDate
+// 						? `từ ${parsedStartDate.toLocaleDateString(
+// 								"vi-VN"
+// 						  )} đến ${parsedEndDate.toLocaleDateString("vi-VN")}`
+// 						: parsedStartDate
+// 						? `từ ${parsedStartDate.toLocaleDateString(
+// 								"vi-VN"
+// 						  )} trở đi`
+// 						: parsedEndDate
+// 						? `đến ${parsedEndDate.toLocaleDateString("vi-VN")}`
+// 						: "trong khoảng thời gian này";
+
+// 				return res.json({
+// 					success: true,
+// 					message: `Bệnh nhân này không có hồ sơ y tế nào`,
+// 					data: {
+// 						patientId,
+// 						timeRange: {
+// 							startDate: parsedStartDate?.toISOString(),
+// 							endDate: parsedEndDate?.toISOString(),
+// 							displayText: timeRangeText,
+// 						},
+// 						totalBlocks: 0,
+// 						verificationResults: [],
+// 						overallValid: true,
+// 						statistics: {
+// 							totalBlocks: 0,
+// 							validBlocks: 0,
+// 							invalidBlocks: 0,
+// 							validityPercentage: 100,
+// 						},
+// 					},
+// 				});
+// 			}
+
+// 			// Tạo danh sách recordId hashes để tìm blocks
+// 			const recordHashes = medicalRecords
+// 				.filter((record) => record.idHash)
+// 				.map((record) => record.idHash);
+
+// 			if (recordHashes.length === 0) {
+// 				const timeRangeText =
+// 					parsedStartDate && parsedEndDate
+// 						? `từ ${parsedStartDate.toLocaleDateString(
+// 								"vi-VN"
+// 						  )} đến ${parsedEndDate.toLocaleDateString("vi-VN")}`
+// 						: parsedStartDate
+// 						? `từ ${parsedStartDate.toLocaleDateString(
+// 								"vi-VN"
+// 						  )} trở đi`
+// 						: parsedEndDate
+// 						? `đến ${parsedEndDate.toLocaleDateString("vi-VN")}`
+// 						: "trong khoảng thời gian này";
+
+// 				return res.json({
+// 					success: true,
+// 					message: `Không có blocks nào được tìm thấy ${timeRangeText}`,
+// 					data: {
+// 						patientId,
+// 						timeRange: {
+// 							startDate: parsedStartDate?.toISOString(),
+// 							endDate: parsedEndDate?.toISOString(),
+// 							displayText: timeRangeText,
+// 						},
+// 						totalBlocks: 0,
+// 						verificationResults: [],
+// 						overallValid: true,
+// 						statistics: {
+// 							totalBlocks: 0,
+// 							validBlocks: 0,
+// 							invalidBlocks: 0,
+// 							validityPercentage: 100,
+// 						},
+// 					},
+// 				});
+// 			}
+
+// 			// Lấy blocks theo điều kiện KHÔNG populate để tính hash chính xác
+// 			const patientBlocks = await Block.find({
+// 				"data.recordId": { $in: recordHashes },
+// 				...dateQuery,
+// 			}).sort({ index: 1 });
+
+// 			// Lấy blocks với populate để hiển thị thông tin
+// 			const patientBlocksWithPopulate = await Block.find({
+// 				"data.recordId": { $in: recordHashes },
+// 				...dateQuery,
+// 			})
+// 				.populate("data.updatedBy", "name email")
+// 				.sort({ index: 1 });
+
+// 			if (patientBlocks.length === 0) {
+// 				const timeRangeText =
+// 					parsedStartDate && parsedEndDate
+// 						? `từ ${parsedStartDate.toLocaleDateString(
+// 								"vi-VN"
+// 						  )} đến ${parsedEndDate.toLocaleDateString("vi-VN")}`
+// 						: parsedStartDate
+// 						? `từ ${parsedStartDate.toLocaleDateString(
+// 								"vi-VN"
+// 						  )} trở đi`
+// 						: parsedEndDate
+// 						? `đến ${parsedEndDate.toLocaleDateString("vi-VN")}`
+// 						: "trong khoảng thời gian này";
+
+// 				return res.json({
+// 					success: true,
+// 					message: `Không có blocks nào ${timeRangeText}`,
+// 					data: {
+// 						patientId,
+// 						timeRange: {
+// 							startDate: parsedStartDate?.toISOString(),
+// 							endDate: parsedEndDate?.toISOString(),
+// 							displayText: timeRangeText,
+// 						},
+// 						totalBlocks: 0,
+// 						verificationResults: [],
+// 						overallValid: true,
+// 						statistics: {
+// 							totalBlocks: 0,
+// 							validBlocks: 0,
+// 							invalidBlocks: 0,
+// 							validityPercentage: 100,
+// 						},
+// 					},
+// 				});
+// 			}
+
+// 			const verificationResults = [];
+// 			let overallValid = true;
+// 			let invalidBlocksCount = 0;
+
+// 			// Xác thực từng block trong khoảng thời gian
+// 			for (let i = 0; i < patientBlocks.length; i++) {
+// 				const currentBlock = patientBlocks[i]; // Block KHÔNG populate
+// 				const currentBlockWithPopulate = patientBlocksWithPopulate[i]; // Block có populate
+
+// 				// Tìm medical record tương ứng với block
+// 				const correspondingRecord = medicalRecords.find(
+// 					(record) => record.idHash === currentBlock.data.recordId
+// 				);
+
+// 				// Lấy thông tin chi tiết medical record để hiển thị
+// 				let recordDetails = null;
+// 				if (correspondingRecord) {
+// 					recordDetails = await MedicalRecord.findById(
+// 						correspondingRecord._id
+// 					)
+// 						.populate("doctorId", "name email")
+// 						.select(
+// 							"diagnosis treatment medication doctorNote dateBack status"
+// 						)
+// 						.lean();
+// 				}
+
+// 				// Tạo raw data object để tính hash - chỉ với các trường cần thiết theo Block schema mới
+// 				const rawData = {
+// 					recordId: currentBlock.data.recordId,
+// 					action: currentBlock.data.action,
+// 				};
+
+// 				// Thêm updatedBy nếu có (chỉ với action update)
+// 				if (currentBlock.data.updatedBy) {
+// 					rawData.updatedBy = currentBlock.data.updatedBy;
+// 				}
+
+// 				// Tính lại hash của block hiện tại
+// 				const calculatedHash = Block.calculateHash(
+// 					currentBlock.index,
+// 					currentBlock.timestamp,
+// 					rawData, // Sử dụng raw data theo schema mới
+// 					currentBlock.previousHash
+// 				);
+
+// 				const isHashValid = currentBlock.hash === calculatedHash;
+
+// 				// Kiểm tra tính liên kết với blockchain chính
+// 				let isPreviousHashValid = true;
+// 				let expectedPreviousHash = null;
+// 				let previousBlockInfo = null;
+
+// 				if (currentBlock.index > 0) {
+// 					// Lấy block trước đó trong blockchain chính (không populate)
+// 					const previousBlock = await Block.findOne({
+// 						index: currentBlock.index - 1,
+// 					})
+// 						.select("hash index timestamp data.action")
+// 						.lean();
+
+// 					if (previousBlock) {
+// 						expectedPreviousHash = previousBlock.hash;
+// 						isPreviousHashValid =
+// 							currentBlock.previousHash === previousBlock.hash;
+// 						previousBlockInfo = {
+// 							index: previousBlock.index,
+// 							hash: previousBlock.hash.substring(0, 12) + "...",
+// 							action: previousBlock.data?.action || "unknown",
+// 						};
+// 					} else {
+// 						isPreviousHashValid = false;
+// 						expectedPreviousHash = "Block trước không tồn tại";
+// 					}
+// 				} else {
+// 					// Genesis block - previous hash should be "0"
+// 					isPreviousHashValid = currentBlock.previousHash === "0";
+// 					expectedPreviousHash = "0";
+// 				}
+
+// 				const blockValid = isHashValid && isPreviousHashValid;
+
+// 				if (!blockValid) {
+// 					overallValid = false;
+// 					invalidBlocksCount++;
+// 				}
+
+// 				// Tạo kết quả verification cho block này
+// 				const verificationResult = {
+// 					blockIndex: currentBlock.index,
+// 					recordId: currentBlock.data.recordId,
+// 					timestamp: currentBlock.timestamp,
+// 					action: currentBlock.data.action,
+
+// 					// Thông tin medical record tương ứng
+// 					recordInfo: recordDetails
+// 						? {
+// 								diagnosis: recordDetails.diagnosis,
+// 								treatment: recordDetails.treatment,
+// 								medication: recordDetails.medication,
+// 								doctorNote: recordDetails.doctorNote,
+// 								dateBack: recordDetails.dateBack,
+// 								status: recordDetails.status,
+// 								doctorInfo: recordDetails.doctorId
+// 									? {
+// 											id: recordDetails.doctorId._id,
+// 											name: recordDetails.doctorId.name,
+// 											email: recordDetails.doctorId.email,
+// 									  }
+// 									: null,
+// 						  }
+// 						: null,
+
+// 					// Thông tin người update (nếu có)
+// 					updatedBy: currentBlockWithPopulate.data.updatedBy
+// 						? {
+// 								id: currentBlockWithPopulate.data.updatedBy._id,
+// 								name: currentBlockWithPopulate.data.updatedBy
+// 									.name,
+// 								email: currentBlockWithPopulate.data.updatedBy
+// 									.email,
+// 						  }
+// 						: null,
+
+// 					// Kết quả validation
+// 					isValid: blockValid,
+
+// 					// Chi tiết verification hash
+// 					hashVerification: {
+// 						isValid: isHashValid,
+// 						storedHash: currentBlock.hash,
+// 						calculatedHash: calculatedHash,
+// 						rawDataUsed: rawData, // Debug info
+// 					},
+
+// 					// Chi tiết verification previous hash
+// 					previousHashVerification: {
+// 						isValid: isPreviousHashValid,
+// 						storedPreviousHash: currentBlock.previousHash,
+// 						expectedPreviousHash: expectedPreviousHash,
+// 						previousBlockInfo: previousBlockInfo,
+// 					},
+
+// 					// Danh sách lỗi (nếu có)
+// 					issues: [
+// 						...(!isHashValid ? ["Hash không hợp lệ"] : []),
+// 						...(!isPreviousHashValid
+// 							? ["Previous hash không hợp lệ"]
+// 							: []),
+// 						...(!recordDetails
+// 							? ["Medical record không tồn tại"]
+// 							: []),
+// 					],
+// 				};
+
+// 				verificationResults.push(verificationResult);
+// 			}
+
+// 			// Tính toán thống kê
+// 			const statistics = {
+// 				totalBlocks: patientBlocks.length,
+// 				validBlocks: patientBlocks.length - invalidBlocksCount,
+// 				invalidBlocks: invalidBlocksCount,
+// 				validityPercentage:
+// 					patientBlocks.length > 0
+// 						? Math.round(
+// 								((patientBlocks.length - invalidBlocksCount) /
+// 									patientBlocks.length) *
+// 									100
+// 						  )
+// 						: 100,
+// 				totalMedicalRecords: medicalRecords.length,
+// 				blocksPerRecord:
+// 					patientBlocks.length > 0
+// 						? Math.round(
+// 								(patientBlocks.length / medicalRecords.length) *
+// 									100
+// 						  ) / 100
+// 						: 0,
+// 			};
+
+// 			// Tạo message mô tả khoảng thời gian
+// 			const timeRangeText =
+// 				parsedStartDate && parsedEndDate
+// 					? `từ ${parsedStartDate.toLocaleDateString(
+// 							"vi-VN"
+// 					  )} đến ${parsedEndDate.toLocaleDateString("vi-VN")}`
+// 					: parsedStartDate
+// 					? `từ ${parsedStartDate.toLocaleDateString("vi-VN")} trở đi`
+// 					: parsedEndDate
+// 					? `đến ${parsedEndDate.toLocaleDateString("vi-VN")}`
+// 					: "trong khoảng thời gian này";
+
+// 			const message = overallValid
+// 				? `Tất cả ${statistics.totalBlocks} blocks ${timeRangeText} đều hợp lệ`
+// 				: `Có ${statistics.invalidBlocks}/${statistics.totalBlocks} blocks không hợp lệ ${timeRangeText}`;
+
+// 			// Tạo summary thông tin với action breakdown
+// 			const summary = {
+// 				firstBlock:
+// 					verificationResults.length > 0
+// 						? {
+// 								index: verificationResults[0].blockIndex,
+// 								timestamp: verificationResults[0].timestamp,
+// 								action: verificationResults[0].action,
+// 								diagnosis:
+// 									verificationResults[0].recordInfo
+// 										?.diagnosis || "N/A",
+// 						  }
+// 						: null,
+
+// 				lastBlock:
+// 					verificationResults.length > 0
+// 						? {
+// 								index: verificationResults[
+// 									verificationResults.length - 1
+// 								].blockIndex,
+// 								timestamp:
+// 									verificationResults[
+// 										verificationResults.length - 1
+// 									].timestamp,
+// 								action: verificationResults[
+// 									verificationResults.length - 1
+// 								].action,
+// 								diagnosis:
+// 									verificationResults[
+// 										verificationResults.length - 1
+// 									].recordInfo?.diagnosis || "N/A",
+// 						  }
+// 						: null,
+
+// 				timespan:
+// 					verificationResults.length > 1
+// 						? {
+// 								from: verificationResults[0].timestamp,
+// 								to: verificationResults[
+// 									verificationResults.length - 1
+// 								].timestamp,
+// 								duration:
+// 									Math.ceil(
+// 										(new Date(
+// 											verificationResults[
+// 												verificationResults.length - 1
+// 											].timestamp
+// 										) -
+// 											new Date(
+// 												verificationResults[0].timestamp
+// 											)) /
+// 											(1000 * 60 * 60 * 24)
+// 									) + " ngày",
+// 						  }
+// 						: null,
+
+// 				// Thống kê theo action trong khoảng thời gian
+// 				actionBreakdown: verificationResults.reduce((acc, result) => {
+// 					acc[result.action] = (acc[result.action] || 0) + 1;
+// 					return acc;
+// 				}, {}),
+// 			};
+
+// 			res.json({
+// 				success: true,
+// 				message: message,
+// 				data: {
+// 					patientId,
+// 					timeRange: {
+// 						startDate: parsedStartDate?.toISOString(),
+// 						endDate: parsedEndDate?.toISOString(),
+// 						displayText: timeRangeText,
+// 					},
+// 					overallValid,
+// 					statistics,
+// 					verificationResults,
+// 					summary,
+// 					metadata: {
+// 						verificationTime: new Date().toISOString(),
+// 						totalMedicalRecords: medicalRecords.length,
+// 						recordsWithBlocks: recordHashes.length,
+// 						avgBlocksPerRecord: statistics.blocksPerRecord,
+// 						timeRangeQuery: dateQuery,
+// 					},
+// 				},
+// 			});
+// 		} catch (error) {
+// 			console.error(
+// 				"Error verifying patient blocks with time range:",
+// 				error
+// 			);
+// 			res.status(500).json({
+// 				success: false,
+// 				message: "Lỗi xác thực blocks theo khoảng thời gian",
+// 				error: error.message,
+// 				stack:
+// 					process.env.NODE_ENV === "development"
+// 						? error.stack
+// 						: undefined,
+// 			});
+// 		}
+// 	}
+// );
+function validateDateRange(startDate, endDate) {
+	let dateQuery = {};
+	let parsedStartDate = null;
+	let parsedEndDate = null;
+
+	// Check if at least one date is provided
+	if (!startDate && !endDate) {
+		return {
+			isValid: false,
+			message: "Vui lòng chọn ít nhất một ngày bắt đầu hoặc kết thúc",
+		};
+	}
+
+	const today = new Date();
+	today.setHours(23, 59, 59, 999);
+
+	try {
+		if (startDate || endDate) {
+			dateQuery.timestamp = {};
+
+			if (startDate) {
+				parsedStartDate = new Date(startDate);
+				if (isNaN(parsedStartDate.getTime())) {
+					return {
+						isValid: false,
+						message: "Ngày bắt đầu không hợp lệ",
+					};
+				}
+
+				// Check if start date is in the future
+				if (parsedStartDate > today) {
+					return {
+						isValid: false,
+						message: "Ngày bắt đầu không thể nằm trong tương lai",
+					};
+				}
+
+				parsedStartDate.setHours(0, 0, 0, 0);
+				dateQuery.timestamp.$gte = parsedStartDate;
+			}
+
+			if (endDate) {
+				parsedEndDate = new Date(endDate);
+				if (isNaN(parsedEndDate.getTime())) {
+					return {
+						isValid: false,
+						message: "Ngày kết thúc không hợp lệ",
+					};
+				}
+
+				// Check if end date is in the future
+				if (parsedEndDate > today) {
+					return {
+						isValid: false,
+						message: "Ngày kết thúc không thể nằm trong tương lai",
+					};
+				}
+
+				parsedEndDate.setHours(23, 59, 59, 999);
+				dateQuery.timestamp.$lte = parsedEndDate;
+			}
+
+			// Validate date range logic
+			if (parsedStartDate && parsedEndDate && parsedStartDate > parsedEndDate) {
+				return {
+					isValid: false,
+					message: "Ngày bắt đầu không thể sau ngày kết thúc",
+				};
+			}
+		}
+
+		// Create display text
+		const timeRangeText = parsedStartDate && parsedEndDate
+			? `từ ${parsedStartDate.toLocaleDateString("vi-VN")} đến ${parsedEndDate.toLocaleDateString("vi-VN")}`
+			: parsedStartDate
+				? `từ ${parsedStartDate.toLocaleDateString("vi-VN")} trở đi`
+				: `đến ${parsedEndDate.toLocaleDateString("vi-VN")}`;
+
+		return {
+			isValid: true,
+			parsedStartDate,
+			parsedEndDate,
+			dateQuery,
+			timeRangeText,
+		};
+
+	} catch (error) {
+		return {
+			isValid: false,
+			message: "Format ngày không đúng",
+		};
+	}
+}
+
+// Helper function to create empty response
+function createEmptyResponse(patientId, startDate, endDate, timeRangeText, message) {
+	return {
+		success: true,
+		message,
+		data: {
+			patientId,
+			timeRange: {
+				startDate: startDate?.toISOString(),
+				endDate: endDate?.toISOString(),
+				displayText: timeRangeText,
+			},
+			totalBlocks: 0,
+			verificationResults: [],
+			overallValid: true,
+			statistics: {
+				totalBlocks: 0,
+				validBlocks: 0,
+				invalidBlocks: 0,
+				validityPercentage: 100,
+				errorsByType: {},
+			},
+			summary: {
+				firstBlock: null,
+				lastBlock: null,
+				timespan: null,
+				actionBreakdown: {},
+				errorSummary: {
+					highSeverityErrors: 0,
+					mediumSeverityErrors: 0,
+					lowSeverityErrors: 0,
+				},
+			},
+		},
+	};
+}
+
+// Main verification logic
+async function verifyBlocksInTimeRange(patientBlocks, patientBlocksWithDetails, medicalRecords) {
+	const verificationResults = [];
+	let overallValid = true;
+	let invalidBlocksCount = 0;
+	const errorBlocks = [];
+	const errorsByType = {};
+
+	for (let i = 0; i < patientBlocks.length; i++) {
+		const currentBlock = patientBlocks[i];
+		const currentBlockWithDetails = patientBlocksWithDetails[i];
+
+		// Find corresponding medical record
+		const correspondingRecord = medicalRecords.find(
+			(record) => record.idHash === currentBlock.data.recordId
+		);
+
+		// Get detailed medical record information
+		let recordDetails = null;
+		if (correspondingRecord) {
+			recordDetails = await MedicalRecord.findById(correspondingRecord._id)
+				.populate("doctorId", "name email")
+				.select("diagnosis treatment medication doctorNote dateBack status")
+				.lean();
+		}
+
+		// Create raw data object for hash calculation
+		const rawData = {
+			recordId: currentBlock.data.recordId,
+			action: currentBlock.data.action,
+		};
+
+		if (currentBlock.data.updatedBy) {
+			rawData.updatedBy = currentBlock.data.updatedBy;
+		}
+
+		// Calculate and verify hash
+		const calculatedHash = Block.calculateHash(
+			currentBlock.index,
+			currentBlock.timestamp,
+			rawData,
+			currentBlock.previousHash
+		);
+
+		const isHashValid = currentBlock.hash === calculatedHash;
+
+		// Verify previous hash connection
+		const previousHashVerification = await verifyPreviousHash(currentBlock);
+
+		const blockValid = isHashValid && previousHashVerification.isValid;
+
+		if (!blockValid) {
+			overallValid = false;
+			invalidBlocksCount++;
+
+			// Create error block entry
+			const errorBlock = createErrorBlock(
+				currentBlock,
+				recordDetails,
+				isHashValid,
+				previousHashVerification,
+				calculatedHash
+			);
+
+			errorBlocks.push(errorBlock);
+
+			// Count errors by type
+			errorBlock.errorTypes.forEach(errorType => {
+				errorsByType[errorType] = (errorsByType[errorType] || 0) + 1;
+			});
+		}
+
+		// Create verification result
+		const verificationResult = {
+			blockIndex: currentBlock.index,
+			recordId: currentBlock.data.recordId,
+			timestamp: currentBlock.timestamp,
+			action: currentBlock.data.action,
+			diagnosis: recordDetails?.diagnosis || "N/A",
+			
+			// Updated by information
+			updatedBy: currentBlockWithDetails.data.updatedBy ? {
+				id: currentBlockWithDetails.data.updatedBy._id,
+				name: currentBlockWithDetails.data.updatedBy.name,
+				email: currentBlockWithDetails.data.updatedBy.email,
+			} : null,
+
+			// Validation result
+			isValid: blockValid,
+
+			// Issues if any
+			issues: [
+				...(!isHashValid ? ["Hash không hợp lệ"] : []),
+				...(!previousHashVerification.isValid ? ["Previous hash không hợp lệ"] : []),
+				...(!recordDetails ? ["Medical record không tồn tại"] : []),
+			],
+		};
+
+		verificationResults.push(verificationResult);
+	}
+
+	return {
+		verificationResults,
+		overallValid,
+		invalidBlocksCount,
+		errorBlocks,
+		errorsByType,
+		totalBlocks: patientBlocks.length,
+	};
+}
+
+// Helper function to verify previous hash
+async function verifyPreviousHash(currentBlock) {
+	let isPreviousHashValid = true;
+	let expectedPreviousHash = null;
+	let previousBlockExists = true;
+
+	if (currentBlock.index > 0) {
+		const previousBlock = await Block.findOne({
+			index: currentBlock.index - 1,
+		})
+			.select("hash")
+			.lean();
+
+		if (previousBlock) {
+			expectedPreviousHash = previousBlock.hash;
+			isPreviousHashValid = currentBlock.previousHash === previousBlock.hash;
+		} else {
+			isPreviousHashValid = false;
+			expectedPreviousHash = "Block trước không tồn tại";
+			previousBlockExists = false;
+		}
+	} else {
+		// Genesis block
+		isPreviousHashValid = currentBlock.previousHash === "0";
+		expectedPreviousHash = "0";
+	}
+
+	return {
+		isValid: isPreviousHashValid,
+		expectedPreviousHash,
+		previousBlockExists,
+		storedPreviousHash: currentBlock.previousHash,
+	};
+}
+
+// Helper function to create error block entry
+function createErrorBlock(currentBlock, recordDetails, isHashValid, previousHashVerification, calculatedHash) {
+	const errorMessages = [];
+	const errorTypes = [];
+
+	if (!isHashValid) {
+		errorMessages.push("Hash của block không khớp với dữ liệu");
+		errorTypes.push("INVALID_HASH");
+	}
+
+	if (!previousHashVerification.isValid) {
+		if (previousHashVerification.previousBlockExists) {
+			errorMessages.push("Previous hash không khớp với block trước");
+			errorTypes.push("INVALID_PREVIOUS_HASH");
+		} else {
+			errorMessages.push("Block trước không tồn tại trong blockchain");
+			errorTypes.push("MISSING_PREVIOUS_BLOCK");
+		}
+	}
+
+	if (!recordDetails) {
+		errorMessages.push("Medical record tương ứng không tồn tại");
+		errorTypes.push("MISSING_RECORD");
+	}
+
+	// Determine severity
+	let severity = "LOW";
+	if (errorTypes.includes("INVALID_HASH")) {
+		severity = "HIGH";
+	} else if (errorTypes.includes("INVALID_PREVIOUS_HASH") || errorTypes.includes("MISSING_PREVIOUS_BLOCK")) {
+		severity = "MEDIUM";
+	}
+
+	const errorBlock = {
+		blockIndex: currentBlock.index,
+		timestamp: currentBlock.timestamp,
+		action: currentBlock.data.action,
+		diagnosis: recordDetails?.diagnosis || "N/A",
+		severity,
+		errorMessages,
+		errorTypes,
+	};
+
+	// Add hash details for hash errors
+	if (!isHashValid) {
+		errorBlock.hashDetails = {
+			stored: currentBlock.hash,
+			calculated: calculatedHash,
+		};
+	}
+
+	// Add previous hash details for previous hash errors
+	if (!previousHashVerification.isValid) {
+		errorBlock.previousHashDetails = {
+			stored: currentBlock.previousHash,
+			expected: previousHashVerification.expectedPreviousHash,
+			previousBlockExists: previousHashVerification.previousBlockExists,
+		};
+	}
+
+	return errorBlock;
+}
+
+// Helper function to create final verification response
+function createVerificationResponse(patientId, startDate, endDate, timeRangeText, verificationResult, totalMedicalRecords) {
+	const { verificationResults, overallValid, invalidBlocksCount, errorBlocks, errorsByType, totalBlocks } = verificationResult;
+
+	// Calculate statistics
+	const statistics = {
+		totalBlocks,
+		validBlocks: totalBlocks - invalidBlocksCount,
+		invalidBlocks: invalidBlocksCount,
+		validityPercentage: totalBlocks > 0 ? Math.round(((totalBlocks - invalidBlocksCount) / totalBlocks) * 100) : 100,
+		errorsByType,
+	};
+
+	// Create summary
+	const summary = createSummary(verificationResults, errorBlocks);
+
+	// Create message
+	const message = overallValid
+		? `Tất cả ${statistics.totalBlocks} blocks ${timeRangeText} đều hợp lệ`
+		: `Có ${statistics.invalidBlocks}/${statistics.totalBlocks} blocks không hợp lệ ${timeRangeText}`;
+
+	return {
+		success: true,
+		message,
+		data: {
+			patientId,
+			timeRange: {
+				startDate: startDate?.toISOString(),
+				endDate: endDate?.toISOString(),
+				displayText: timeRangeText,
+			},
+			overallValid,
+			statistics,
+			verificationResults,
+			errorBlocks,
+			summary,
+			metadata: {
+				verificationTime: new Date().toISOString(),
+				totalMedicalRecords,
+				avgBlocksPerRecord: totalBlocks > 0 ? Math.round((totalBlocks / totalMedicalRecords) * 100) / 100 : 0,
+			},
+		},
+	};
+}
+
+// Helper function to create summary
+function createSummary(verificationResults, errorBlocks) {
+	const summary = {
+		firstBlock: verificationResults.length > 0 ? {
+			index: verificationResults[0].blockIndex,
+			timestamp: verificationResults[0].timestamp,
+			action: verificationResults[0].action,
+			diagnosis: verificationResults[0].diagnosis,
+			isValid: verificationResults[0].isValid,
+		} : null,
+
+		lastBlock: verificationResults.length > 0 ? {
+			index: verificationResults[verificationResults.length - 1].blockIndex,
+			timestamp: verificationResults[verificationResults.length - 1].timestamp,
+			action: verificationResults[verificationResults.length - 1].action,
+			diagnosis: verificationResults[verificationResults.length - 1].diagnosis,
+			isValid: verificationResults[verificationResults.length - 1].isValid,
+		} : null,
+
+		timespan: verificationResults.length > 1 ? {
+			from: verificationResults[0].timestamp,
+			to: verificationResults[verificationResults.length - 1].timestamp,
+			duration: Math.ceil(
+				(new Date(verificationResults[verificationResults.length - 1].timestamp) -
+					new Date(verificationResults[0].timestamp)) /
+				(1000 * 60 * 60 * 24)
+			) + " ngày",
+		} : null,
+
+		actionBreakdown: verificationResults.reduce((acc, result) => {
+			acc[result.action] = (acc[result.action] || 0) + 1;
+			return acc;
+		}, {}),
+
+		errorSummary: {
+			highSeverityErrors: errorBlocks.filter(block => block.severity === "HIGH").length,
+			mediumSeverityErrors: errorBlocks.filter(block => block.severity === "MEDIUM").length,
+			lowSeverityErrors: errorBlocks.filter(block => block.severity === "LOW").length,
+		},
+	};
+
+	return summary;
+}
 router.get(
 	"/patient/:patientId/verify/timerange",
 	authenticateToken,
@@ -679,7 +1878,7 @@ router.get(
 			const { patientId } = req.params;
 			const { startDate, endDate } = req.query;
 
-			// Patient chỉ xem blocks của chính họ
+			// Authorization check - patients can only access their own blocks
 			if (req.user.role === "patient" && patientId !== req.user.userId) {
 				return res.status(403).json({
 					success: false,
@@ -687,337 +1886,81 @@ router.get(
 				});
 			}
 
-			// Validate và parse date parameters
-			let dateQuery = {};
-			let parsedStartDate = null;
-			let parsedEndDate = null;
-
-			if (startDate || endDate) {
-				dateQuery.timestamp = {};
-
-				if (startDate) {
-					try {
-						parsedStartDate = new Date(startDate);
-						if (isNaN(parsedStartDate.getTime())) {
-							return res.status(400).json({
-								success: false,
-								message: "Ngày bắt đầu không hợp lệ",
-							});
-						}
-						// Set to start of day
-						parsedStartDate.setHours(0, 0, 0, 0);
-						dateQuery.timestamp.$gte = parsedStartDate;
-					} catch (error) {
-						return res.status(400).json({
-							success: false,
-							message: "Format ngày bắt đầu không đúng",
-						});
-					}
-				}
-
-				if (endDate) {
-					try {
-						parsedEndDate = new Date(endDate);
-						if (isNaN(parsedEndDate.getTime())) {
-							return res.status(400).json({
-								success: false,
-								message: "Ngày kết thúc không hợp lệ",
-							});
-						}
-						// Set to end of day
-						parsedEndDate.setHours(23, 59, 59, 999);
-						dateQuery.timestamp.$lte = parsedEndDate;
-					} catch (error) {
-						return res.status(400).json({
-							success: false,
-							message: "Format ngày kết thúc không đúng",
-						});
-					}
-				}
-
-				// Validate date range logic
-				if (
-					parsedStartDate &&
-					parsedEndDate &&
-					parsedStartDate > parsedEndDate
-				) {
-					return res.status(400).json({
-						success: false,
-						message: "Ngày bắt đầu không thể sau ngày kết thúc",
-					});
-				}
-			}
-
-			// Lấy blocks theo điều kiện KHÔNG populate để tính hash chính xác
-			const patientBlocks = await Block.find({
-				"data.patientId": patientId,
-				...dateQuery,
-			}).sort({ index: 1 });
-
-			// Lấy blocks với populate để hiển thị thông tin
-			const patientBlocksWithPopulate = await Block.find({
-				"data.patientId": patientId,
-				...dateQuery,
-			})
-				.populate("data.doctorId", "name email")
-				.populate("data.recordId")
-				.populate("data.updatedBy", "name email")
-				.sort({ index: 1 });
-
-			if (patientBlocks.length === 0) {
-				const timeRangeText =
-					parsedStartDate && parsedEndDate
-						? `từ ${parsedStartDate.toLocaleDateString(
-								"vi-VN"
-						  )} đến ${parsedEndDate.toLocaleDateString("vi-VN")}`
-						: parsedStartDate
-						? `từ ${parsedStartDate.toLocaleDateString(
-								"vi-VN"
-						  )} trở đi`
-						: parsedEndDate
-						? `đến ${parsedEndDate.toLocaleDateString("vi-VN")}`
-						: "trong khoảng thời gian này";
-
-				return res.json({
-					success: true,
-					message: `Không có blocks nào ${timeRangeText}`,
-					data: {
-						patientId,
-						timeRange: {
-							startDate: parsedStartDate?.toISOString(),
-							endDate: parsedEndDate?.toISOString(),
-						},
-						totalBlocks: 0,
-						verificationResults: [],
-						overallValid: true,
-						statistics: {
-							totalBlocks: 0,
-							validBlocks: 0,
-							invalidBlocks: 0,
-							validityPercentage: 100,
-						},
-					},
+			// Validate and parse date parameters
+			const dateValidation = validateDateRange(startDate, endDate);
+			if (!dateValidation.isValid) {
+				return res.status(400).json({
+					success: false,
+					message: dateValidation.message,
 				});
 			}
 
-			const verificationResults = [];
-			let overallValid = true;
-			let invalidBlocksCount = 0;
+			const { parsedStartDate, parsedEndDate, dateQuery, timeRangeText } = dateValidation;
 
-			// Xác thực từng block trong khoảng thời gian
-			for (let i = 0; i < patientBlocks.length; i++) {
-				const currentBlock = patientBlocks[i]; // Block KHÔNG populate
-				const currentBlockWithPopulate = patientBlocksWithPopulate[i]; // Block có populate
+			// Get patient's medical records
+			const medicalRecords = await MedicalRecord.find({
+				patientId: patientId,
+			})
+				.select("_id idHash createdAt updatedAt diagnosis")
+				.lean();
 
-				// Tạo raw data object để tính hash - đảm bảo format giống lúc tạo block
-				const rawData = {
-					recordId: currentBlock.data.recordId,
-					patientId: currentBlock.data.patientId,
-					doctorId: currentBlock.data.doctorId,
-					diagnosis: currentBlock.data.diagnosis,
-					treatment: currentBlock.data.treatment,
-					medication: currentBlock.data.medication,
-					doctorNote: currentBlock.data.doctorNote,
-					dateBack: currentBlock.data.dateBack,
-					action: currentBlock.data.action,
-				};
-
-				// Thêm updatedBy nếu có (chỉ với action update)
-				if (currentBlock.data.updatedBy) {
-					rawData.updatedBy = currentBlock.data.updatedBy;
-				}
-
-				// Tính lại hash của block hiện tại
-				const calculatedHash = Block.calculateHash(
-					currentBlock.index,
-					currentBlock.timestamp,
-					rawData, // Sử dụng raw data
-					currentBlock.previousHash
-				);
-
-				const isHashValid = currentBlock.hash === calculatedHash;
-
-				// Kiểm tra tính liên kết với blockchain chính
-				let isPreviousHashValid = true;
-				let expectedPreviousHash = null;
-
-				if (currentBlock.index > 0) {
-					// Lấy block trước đó trong blockchain chính (không populate)
-					const previousBlock = await Block.findOne({
-						index: currentBlock.index - 1,
-					});
-
-					if (previousBlock) {
-						expectedPreviousHash = previousBlock.hash;
-						isPreviousHashValid =
-							currentBlock.previousHash === previousBlock.hash;
-					} else {
-						isPreviousHashValid = false;
-						expectedPreviousHash = "Block trước không tồn tại";
-					}
-				}
-
-				const blockValid = isHashValid && isPreviousHashValid;
-
-				if (!blockValid) {
-					overallValid = false;
-					invalidBlocksCount++;
-				}
-
-				const data = {
-					blockIndex: currentBlock.index,
-					recordId: currentBlock.data.recordId,
-					timestamp: currentBlock.timestamp,
-					action: currentBlock.data.action,
-					diagnosis: currentBlock.data.diagnosis,
-					treatment: currentBlock.data.treatment,
-					medication: currentBlock.data.medication,
-					doctorNote: currentBlock.data.doctorNote,
-					dateBack: currentBlock.data.dateBack,
-					doctorInfo: currentBlockWithPopulate.data.doctorId
-						? {
-								id: currentBlockWithPopulate.data.doctorId._id,
-								name: currentBlockWithPopulate.data.doctorId
-									.name,
-								email: currentBlockWithPopulate.data.doctorId
-									.email,
-						  }
-						: null,
-					isValid: blockValid,
-					hashVerification: {
-						isValid: isHashValid,
-						storedHash: currentBlock.hash,
-						calculatedHash: calculatedHash,
-						rawDataUsed: rawData, // Debug info
-					},
-					previousHashVerification: {
-						isValid: isPreviousHashValid,
-						storedPreviousHash: currentBlock.previousHash,
-						expectedPreviousHash: expectedPreviousHash,
-					},
-					issues: [
-						...(!isHashValid ? ["Hash không hợp lệ"] : []),
-						...(!isPreviousHashValid
-							? ["Previous hash không hợp lệ"]
-							: []),
-					],
-				};
-				if (currentBlock.data.action === "update") {
-					data.updatedBy = currentBlockWithPopulate.data.updatedBy; // Chỉ thêm updatedBy nếu action là update
-				}
-				verificationResults.push(data);
+			if (medicalRecords.length === 0) {
+				return res.json(createEmptyResponse(patientId, parsedStartDate, parsedEndDate, timeRangeText, "Bệnh nhân này không có hồ sơ y tế nào"));
 			}
 
-			// Tính toán thống kê
-			const statistics = {
-				totalBlocks: patientBlocks.length,
-				validBlocks: patientBlocks.length - invalidBlocksCount,
-				invalidBlocks: invalidBlocksCount,
-				validityPercentage:
-					patientBlocks.length > 0
-						? Math.round(
-								((patientBlocks.length - invalidBlocksCount) /
-									patientBlocks.length) *
-									100
-						  )
-						: 100,
-			};
+			// Get record hashes for blockchain lookup
+			const recordHashes = medicalRecords
+				.filter((record) => record.idHash)
+				.map((record) => record.idHash);
 
-			// Tạo message mô tả khoảng thời gian
-			const timeRangeText =
-				parsedStartDate && parsedEndDate
-					? `từ ${parsedStartDate.toLocaleDateString(
-							"vi-VN"
-					  )} đến ${parsedEndDate.toLocaleDateString("vi-VN")}`
-					: parsedStartDate
-					? `từ ${parsedStartDate.toLocaleDateString("vi-VN")} trở đi`
-					: parsedEndDate
-					? `đến ${parsedEndDate.toLocaleDateString("vi-VN")}`
-					: "trong khoảng thời gian này";
+			if (recordHashes.length === 0) {
+				return res.json(createEmptyResponse(patientId, parsedStartDate, parsedEndDate, timeRangeText, `Không có blocks nào được tìm thấy ${timeRangeText}`));
+			}
 
-			const message = overallValid
-				? `Tất cả ${statistics.totalBlocks} blocks ${timeRangeText} đều hợp lệ`
-				: `Có ${statistics.invalidBlocks}/${statistics.totalBlocks} blocks không hợp lệ ${timeRangeText}`;
+			// Fetch blocks for verification (without populate for accurate hash calculation)
+			const patientBlocks = await Block.find({
+				"data.recordId": { $in: recordHashes },
+				...dateQuery,
+			}).sort({ index: 1 });
 
-			res.json({
-				success: true,
-				message: message,
-				data: {
-					patientId,
-					timeRange: {
-						startDate: parsedStartDate?.toISOString(),
-						endDate: parsedEndDate?.toISOString(),
-						displayText: timeRangeText,
-					},
-					overallValid,
-					statistics,
-					verificationResults,
-					summary: {
-						firstBlock:
-							verificationResults.length > 0
-								? {
-										index: verificationResults[0]
-											.blockIndex,
-										timestamp:
-											verificationResults[0].timestamp,
-										diagnosis:
-											verificationResults[0].diagnosis,
-								  }
-								: null,
-						lastBlock:
-							verificationResults.length > 0
-								? {
-										index: verificationResults[
-											verificationResults.length - 1
-										].blockIndex,
-										timestamp:
-											verificationResults[
-												verificationResults.length - 1
-											].timestamp,
-										diagnosis:
-											verificationResults[
-												verificationResults.length - 1
-											].diagnosis,
-								  }
-								: null,
-						timespan:
-							verificationResults.length > 1
-								? {
-										from: verificationResults[0].timestamp,
-										to: verificationResults[
-											verificationResults.length - 1
-										].timestamp,
-										duration:
-											Math.ceil(
-												(new Date(
-													verificationResults[
-														verificationResults.length -
-															1
-													].timestamp
-												) -
-													new Date(
-														verificationResults[0].timestamp
-													)) /
-													(1000 * 60 * 60 * 24)
-											) + " ngày",
-								  }
-								: null,
-					},
-				},
-			});
-		} catch (error) {
-			console.error(
-				"Error verifying patient blocks with time range:",
-				error
+			if (patientBlocks.length === 0) {
+				return res.json(createEmptyResponse(patientId, parsedStartDate, parsedEndDate, timeRangeText, `Không có blocks nào ${timeRangeText}`));
+			}
+
+			// Fetch blocks with populate for display information
+			const patientBlocksWithDetails = await Block.find({
+				"data.recordId": { $in: recordHashes },
+				...dateQuery,
+			})
+				.populate("data.updatedBy", "name email")
+				.sort({ index: 1 });
+
+			// Perform verification
+			const verificationResult = await verifyBlocksInTimeRange(
+				patientBlocks,
+				patientBlocksWithDetails,
+				medicalRecords
 			);
+
+			// Generate response
+			const response = createVerificationResponse(
+				patientId,
+				parsedStartDate,
+				parsedEndDate,
+				timeRangeText,
+				verificationResult,
+				medicalRecords.length
+			);
+
+			res.json(response);
+
+		} catch (error) {
+			console.error("Error verifying patient blocks with time range:", error);
 			res.status(500).json({
 				success: false,
 				message: "Lỗi xác thực blocks theo khoảng thời gian",
 				error: error.message,
-				stack:
-					process.env.NODE_ENV === "development"
-						? error.stack
-						: undefined,
+				stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
 			});
 		}
 	}

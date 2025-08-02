@@ -10,26 +10,19 @@ const blockSchema = new mongoose.Schema(
 		},
 		data: {
 			recordId: {
-				type: mongoose.Schema.Types.ObjectId,
-				ref: "MedicalRecord",
+				type: String, // JWT token
+				required: true,
 			},
-			patientId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-			doctorId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-			diagnosis: String,
-			treatment: String,
-			medication: String,
-			doctorNote: String,
-			dateBack: Date, // Ngày hẹn tái khám
 			action: {
 				type: String,
-				enum: ["create", "update", "delete"], // Thêm trường action để xác định loại giao dịch
+				enum: ["create", "update", "delete"],
 				required: true,
 			},
 			updatedBy: {
 				type: mongoose.Schema.Types.ObjectId,
-				ref: "User", // Người thực hiện cập nhật
-				required: () => {
-					return this.action === "update"; // Chỉ yêu cầu khi action là update
+				ref: "User",
+				required: function () {
+					return this.data && this.data.action === "update";
 				},
 			},
 		},
@@ -45,40 +38,35 @@ const blockSchema = new mongoose.Schema(
 	{ timestamps: true }
 );
 
+// QUAN TRỌNG: Thêm index cho hiệu suất
+blockSchema.index({ "data.recordIdHash": 1, index: 1 });
+
 blockSchema.statics.calculateHash = function (
 	index,
 	timestamp,
 	data,
 	previousHash
 ) {
-	// XỬ LÝ TIMESTAMP THỐNG NHẤT
 	let timestampStr;
-
 	if (timestamp instanceof Date) {
 		timestampStr = timestamp.toISOString();
 	} else if (typeof timestamp === "number") {
-		// Nếu là Date.now() (number), convert sang Date rồi toISOString
 		timestampStr = new Date(timestamp).toISOString();
 	} else {
-		// Fallback cho các trường hợp khác
 		timestampStr = String(timestamp);
 	}
 
-	// SERIALIZE DATA THỐNG NHẤT
-	const dataStr = JSON.stringify(data, null, 0); // Không có whitespace
-
+	const dataStr = JSON.stringify(data, null, 0);
 	const inputString = index + timestampStr + dataStr + previousHash;
 	const hash = crypto.createHash("sha256").update(inputString).digest("hex");
 
 	return hash;
 };
 
-// Static method để lấy block cuối cùng
 blockSchema.statics.getLatestBlock = async function () {
 	return await this.findOne().sort({ index: -1 });
 };
 
-// Static method để lấy block tiếp theo index
 blockSchema.statics.getNextIndex = async function () {
 	const latestBlock = await this.getLatestBlock();
 	return latestBlock ? latestBlock.index + 1 : 0;

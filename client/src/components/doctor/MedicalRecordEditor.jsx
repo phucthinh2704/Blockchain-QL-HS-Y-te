@@ -112,7 +112,7 @@ const MedicalRecordEditor = ({ record, onSave, onCancel, isOpen = true }) => {
 				dateBack: formData.dateBack || null,
 				status: formData.status,
 			};
-			console.log("Updating record with data:", updateData);
+
 			const response = await apiUpdateMedicalRecord(
 				record._id,
 				updateData
