@@ -1,26 +1,34 @@
 // controllers/userController.js
 const User = require("../models/User");
-const bcrypt = require("bcrypt");
+const bcrypt = require("bcryptjs");
+const { ethers } = require("ethers");
 
-// 1. Đăng ký người dùng mới (Public)
+// Helper function to validate wallet address
+const isValidWalletAddress = (address) => {
+	return /^0x[a-fA-F0-9]{40}$/.test(address);
+};
+
+// Helper function to verify wallet signature
+const verifyWalletSignature = async (walletAddress, signature, message) => {
+	try {
+		const recoveredAddress = ethers.utils.verifyMessage(message, signature);
+		return recoveredAddress.toLowerCase() === walletAddress.toLowerCase();
+	} catch (error) {
+		console.error("Signature verification error:", error);
+		return false;
+	}
+};
+
+// 1. Register new user (Traditional)
 const registerUser = async (req, res) => {
 	try {
-		const { email, password, name, role, phoneNumber, dateOfBirth } =
-			req.body;
+		const { email, password, name, role, phoneNumber, dateOfBirth } = req.body;
 
-		// Kiểm tra thông tin bắt buộc
-		if (
-			!email ||
-			!password ||
-			!name ||
-			!role ||
-			!phoneNumber ||
-			!dateOfBirth
-		) {
+		// Validate required fields for traditional registration
+		if (!email || !password || !name || !role) {
 			return res.status(400).json({
 				success: false,
-				message:
-					"Thiếu thông tin bắt buộc: email, password, name, role, phoneNumber, dateOfBirth",
+				message: "Missing required fields: email, password, name, role",
 			});
 		}
 
@@ -28,114 +36,267 @@ const registerUser = async (req, res) => {
 		if (!["patient", "doctor", "admin"].includes(role)) {
 			return res.status(400).json({
 				success: false,
-				message:
-					"Role không hợp lệ. Chỉ chấp nhận: patient, doctor, admin",
+				message: "Invalid role. Only accepts: patient, doctor, admin",
 			});
 		}
 
-		// Kiểm tra email đã tồn tại
-		const existingUser = await User.findOne({ email });
+		// Validate email format
+		const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+		if (!emailRegex.test(email)) {
+			return res.status(400).json({
+				success: false,
+				message: "Invalid email format",
+			});
+		}
+
+		// Check if email already exists
+		const existingUser = await User.findOne({ 
+			email: email.toLowerCase().trim() 
+		});
 		if (existingUser) {
 			return res.status(400).json({
 				success: false,
-				message: "Email đã được sử dụng",
+				message: "Email already in use",
 			});
 		}
 
 		// Hash password
-		const saltRounds = 10;
+		const saltRounds = 12;
 		const hashedPassword = await bcrypt.hash(password, saltRounds);
 
-		// Tạo user mới
+		// Prepare user data
 		const userData = {
 			email: email.toLowerCase().trim(),
 			password: hashedPassword,
 			name: name.trim(),
 			role,
+			authMethod: "traditional"
 		};
 
-		// Thêm thông tin tùy chọn
+		// Add optional fields
 		if (phoneNumber) {
 			if (!/^\d{10,15}$/.test(phoneNumber)) {
 				return res.status(400).json({
 					success: false,
-					message: "Số điện thoại không hợp lệ",
+					message: "Invalid phone number format",
 				});
 			}
 			userData.phoneNumber = phoneNumber.trim();
 		}
+
 		if (dateOfBirth) {
-			if (
-				!Date.parse(dateOfBirth) ||
-				dateOfBirth < "1900-01-01" ||
-				dateOfBirth > new Date().toISOString().split("T")[0]
-			) {
+			const birthDate = new Date(dateOfBirth);
+			const today = new Date();
+			if (isNaN(birthDate.getTime()) || birthDate >= today) {
 				return res.status(400).json({
 					success: false,
-					message: "Ngày sinh không hợp lệ",
+					message: "Invalid date of birth",
 				});
 			}
-			userData.dateOfBirth = new Date(dateOfBirth);
+			userData.dateOfBirth = birthDate;
 		}
 
 		const user = new User(userData);
 		await user.save();
 
-		// Trả về thông tin user (không bao gồm password)
-		const userResponse = user.toObject();
-		delete userResponse.password;
+		// Prepare response (exclude password)
+		const userResponse = {
+			_id: user._id,
+			email: user.email,
+			name: user.name,
+			role: user.role,
+			phoneNumber: user.phoneNumber,
+			dateOfBirth: user.dateOfBirth,
+			authMethod: user.authMethod,
+			createdAt: user.createdAt,
+			updatedAt: user.updatedAt,
+		};
 
 		res.status(201).json({
 			success: true,
-			message: "Đăng ký thành công",
+			message: "Registration successful",
 			data: userResponse,
 		});
 	} catch (error) {
 		console.error("Register error:", error);
 
-		// Handle validation errors
 		if (error.name === "ValidationError") {
-			const messages = Object.values(error.errors).map(
-				(err) => err.message
-			);
+			const messages = Object.values(error.errors).map(err => err.message);
 			return res.status(400).json({
 				success: false,
-				message: "Lỗi validation",
+				message: "Validation error",
 				errors: messages,
 			});
 		}
 
-		// Handle duplicate key error
 		if (error.code === 11000) {
 			return res.status(400).json({
 				success: false,
-				message: "Email đã được sử dụng",
+				message: "Email already in use",
 			});
 		}
 
 		res.status(500).json({
 			success: false,
-			message: "Lỗi server khi đăng ký người dùng",
-			error: error.message,
+			message: "Internal server error during registration",
 		});
 	}
 };
 
-// 2. Lấy danh sách tất cả users (Admin only)
+// 2. Register wallet user
+const registerWalletUser = async (req, res) => {
+	try {
+		const { walletAddress, signature, message, name, role, phoneNumber, dateOfBirth } = req.body;
+
+		// Validate required fields
+		if (!walletAddress || !signature || !message || !name || !role) {
+			return res.status(400).json({
+				success: false,
+				message: "Missing required fields: walletAddress, signature, message, name, role",
+			});
+		}
+
+		// Validate role
+		if (!["patient", "doctor", "admin"].includes(role)) {
+			return res.status(400).json({
+				success: false,
+				message: "Invalid role. Only accepts: patient, doctor, admin",
+			});
+		}
+
+		// Validate wallet address format
+		if (!isValidWalletAddress(walletAddress)) {
+			return res.status(400).json({
+				success: false,
+				message: "Invalid wallet address format",
+			});
+		}
+
+		// Verify wallet signature
+		const isValidSignature = await verifyWalletSignature(walletAddress, signature, message);
+		if (!isValidSignature) {
+			return res.status(401).json({
+				success: false,
+				message: "Invalid wallet signature",
+			});
+		}
+
+		// Check if wallet already exists
+		const existingUser = await User.findOne({ 
+			walletAddress: walletAddress.toLowerCase() 
+		});
+		if (existingUser) {
+			return res.status(400).json({
+				success: false,
+				message: "Wallet address already registered",
+			});
+		}
+
+		// Prepare user data
+		const userData = {
+			walletAddress: walletAddress.toLowerCase(),
+			name: name.trim(),
+			role,
+			authMethod: "wallet",
+			isWalletVerified: true
+		};
+
+		// Add optional fields
+		if (phoneNumber) {
+			if (!/^\d{10,15}$/.test(phoneNumber)) {
+				return res.status(400).json({
+					success: false,
+					message: "Invalid phone number format",
+				});
+			}
+			userData.phoneNumber = phoneNumber.trim();
+		}
+
+		if (dateOfBirth) {
+			const birthDate = new Date(dateOfBirth);
+			const today = new Date();
+			if (isNaN(birthDate.getTime()) || birthDate >= today) {
+				return res.status(400).json({
+					success: false,
+					message: "Invalid date of birth",
+				});
+			}
+			userData.dateOfBirth = birthDate;
+		}
+
+		const user = new User(userData);
+		await user.save();
+
+		// Prepare response
+		const userResponse = {
+			_id: user._id,
+			walletAddress: user.walletAddress,
+			name: user.name,
+			role: user.role,
+			phoneNumber: user.phoneNumber,
+			dateOfBirth: user.dateOfBirth,
+			authMethod: user.authMethod,
+			isWalletVerified: user.isWalletVerified,
+			createdAt: user.createdAt,
+			updatedAt: user.updatedAt,
+		};
+
+		res.status(201).json({
+			success: true,
+			message: "Wallet registration successful",
+			data: userResponse,
+		});
+	} catch (error) {
+		console.error("Wallet register error:", error);
+
+		if (error.name === "ValidationError") {
+			const messages = Object.values(error.errors).map(err => err.message);
+			return res.status(400).json({
+				success: false,
+				message: "Validation error",
+				errors: messages,
+			});
+		}
+
+		if (error.code === 11000) {
+			return res.status(400).json({
+				success: false,
+				message: "Wallet address already registered",
+			});
+		}
+
+		res.status(500).json({
+			success: false,
+			message: "Internal server error during wallet registration",
+		});
+	}
+};
+
+// 3. Get all users (Admin only)
 const getUsers = async (req, res) => {
 	try {
-		const { role, page = 1, limit = 10 } = req.query;
+		const { role, authMethod, page = 1, limit = 10, search } = req.query;
 
 		// Build filter
 		const filter = {};
 		if (role && ["patient", "doctor", "admin"].includes(role)) {
 			filter.role = role;
 		}
+		if (authMethod && ["traditional", "wallet"].includes(authMethod)) {
+			filter.authMethod = authMethod;
+		}
+		if (search) {
+			filter.$or = [
+				{ name: { $regex: search, $options: 'i' } },
+				{ email: { $regex: search, $options: 'i' } },
+				{ walletAddress: { $regex: search, $options: 'i' } }
+			];
+		}
 
 		// Pagination
 		const skip = (parseInt(page) - 1) * parseInt(limit);
 
-		// Get users
+		// Get users with appropriate fields based on auth method
 		const users = await User.find(filter)
 			.select("-password")
 			.sort({ createdAt: -1 })
@@ -161,17 +322,16 @@ const getUsers = async (req, res) => {
 		console.error("Get users error:", error);
 		res.status(500).json({
 			success: false,
-			message: "Lỗi lấy danh sách người dùng",
-			error: error.message,
+			message: "Error fetching users",
 		});
 	}
 };
 
-// 3. Lấy danh sách bác sĩ (Patient, Doctor, Admin)
+// 4. Get doctors list (Patient, Doctor, Admin)
 const getDoctors = async (req, res) => {
 	try {
 		const doctors = await User.find({ role: "doctor" })
-			.select("name email phoneNumber createdAt")
+			.select("name email walletAddress phoneNumber authMethod createdAt")
 			.sort({ name: 1 });
 
 		res.json({
@@ -183,17 +343,16 @@ const getDoctors = async (req, res) => {
 		console.error("Get doctors error:", error);
 		res.status(500).json({
 			success: false,
-			message: "Lỗi lấy danh sách bác sĩ",
-			error: error.message,
+			message: "Error fetching doctors list",
 		});
 	}
 };
 
-// 4. Lấy danh sách bệnh nhân (Doctor, Admin)
+// 5. Get patients list (Doctor, Admin)
 const getPatients = async (req, res) => {
 	try {
 		const patients = await User.find({ role: "patient" })
-			.select("name email phoneNumber dateOfBirth createdAt")
+			.select("name email walletAddress phoneNumber dateOfBirth authMethod createdAt")
 			.sort({ name: 1 });
 
 		res.json({
@@ -205,13 +364,12 @@ const getPatients = async (req, res) => {
 		console.error("Get patients error:", error);
 		res.status(500).json({
 			success: false,
-			message: "Lỗi lấy danh sách bệnh nhân",
-			error: error.message,
+			message: "Error fetching patients list",
 		});
 	}
 };
 
-// 5. Lấy thông tin user theo ID (All authenticated users)
+// 6. Get user by ID (All authenticated users)
 const getUserById = async (req, res) => {
 	try {
 		const { userId } = req.params;
@@ -220,7 +378,7 @@ const getUserById = async (req, res) => {
 		if (!userId.match(/^[0-9a-fA-F]{24}$/)) {
 			return res.status(400).json({
 				success: false,
-				message: "ID người dùng không hợp lệ",
+				message: "Invalid user ID format",
 			});
 		}
 
@@ -229,33 +387,37 @@ const getUserById = async (req, res) => {
 		if (!user) {
 			return res.status(404).json({
 				success: false,
-				message: "Không tìm thấy người dùng",
+				message: "User not found",
 			});
 		}
 
-		// Kiểm tra quyền truy cập
-		// Admin có thể xem tất cả
-		// User chỉ có thể xem thông tin của chính họ
-		// Doctor/Patient có thể xem thông tin cơ bản của nhau
+		// Access control
 		let responseData = {};
 
 		if (req.user.role === "admin") {
-			// Admin xem được tất cả thông tin
+			// Admin can see all information
 			responseData = user.toObject();
 		} else if (req.user.userId === userId) {
-			// User xem thông tin của chính họ
+			// User viewing their own profile
 			responseData = user.toObject();
 		} else {
-			// Xem thông tin cơ bản của user khác
+			// Basic information for other users
 			responseData = {
 				_id: user._id,
 				name: user.name,
-				email: user.email,
 				role: user.role,
 				phoneNumber: user.phoneNumber,
+				authMethod: user.authMethod,
 			};
 
-			// Nếu là patient thì doctor có thể xem thêm dateOfBirth
+			// Add auth-method specific fields
+			if (user.authMethod === "traditional") {
+				responseData.email = user.email;
+			} else {
+				responseData.walletAddress = user.walletAddress;
+			}
+
+			// Doctor can see patient's date of birth
 			if (user.role === "patient" && req.user.role === "doctor") {
 				responseData.dateOfBirth = user.dateOfBirth;
 			}
@@ -269,146 +431,161 @@ const getUserById = async (req, res) => {
 		console.error("Get user by ID error:", error);
 		res.status(500).json({
 			success: false,
-			message: "Lỗi lấy thông tin người dùng",
-			error: error.message,
+			message: "Error fetching user information",
 		});
 	}
 };
 
-// 6. Cập nhật thông tin user (User tự cập nhật hoặc Admin)
+// 7. Update user (Self or Admin)
 const updateUser = async (req, res) => {
 	try {
 		const { userId } = req.params;
-		const { email, name, phoneNumber } = req.body;
+		const { email, name, phoneNumber, dateOfBirth } = req.body;
 
-		// Kiểm tra quyền: user chỉ được cập nhật thông tin của chính họ (trừ admin)
+		// Access control
 		if (req.user.role !== "admin" && userId !== req.user.userId) {
 			return res.status(403).json({
 				success: false,
-				message: "Bạn chỉ có thể cập nhật thông tin của chính mình",
+				message: "You can only update your own information",
 			});
 		}
 
-		// Tìm user hiện tại
+		// Find current user
 		const currentUser = await User.findById(userId);
 		if (!currentUser) {
 			return res.status(404).json({
 				success: false,
-				message: "Không tìm thấy người dùng",
+				message: "User not found",
 			});
 		}
 
-		// Chuẩn bị dữ liệu cập nhật
+		// Prepare update data
 		const updateData = {};
 
-		// Cập nhật email (kiểm tra unique nếu có thay đổi)
-		if (email !== undefined && email.trim()) {
+		// Update email (only for traditional auth users)
+		if (email !== undefined && currentUser.authMethod === "traditional") {
 			const trimmedEmail = email.trim().toLowerCase();
 
-			// Kiểm tra định dạng email
-			const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-			if (!emailRegex.test(trimmedEmail)) {
-				return res.status(400).json({
-					success: false,
-					message: "Email không hợp lệ",
-				});
-			}
-
-			// Kiểm tra nếu email mới khác với email hiện tại
-			if (trimmedEmail !== currentUser.email) {
-				// Kiểm tra email đã tồn tại chưa
-				const existingUser = await User.findOne({
-					email: trimmedEmail,
-					_id: { $ne: userId }, // Loại trừ user hiện tại
-				});
-
-				if (existingUser) {
+			if (trimmedEmail) {
+				// Validate email format
+				const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+				if (!emailRegex.test(trimmedEmail)) {
 					return res.status(400).json({
 						success: false,
-						message: "Email đã được sử dụng bởi người dùng khác",
+						message: "Invalid email format",
 					});
 				}
 
-				updateData.email = trimmedEmail;
+				// Check if email is different and not already used
+				if (trimmedEmail !== currentUser.email) {
+					const existingUser = await User.findOne({
+						email: trimmedEmail,
+						_id: { $ne: userId },
+					});
+
+					if (existingUser) {
+						return res.status(400).json({
+							success: false,
+							message: "Email already in use by another user",
+						});
+					}
+
+					updateData.email = trimmedEmail;
+				}
 			}
 		}
 
-		// Cập nhật name
+		// Update name
 		if (name !== undefined && name.trim()) {
 			updateData.name = name.trim();
 		}
 
-		// Cập nhật phoneNumber
+		// Update phone number
 		if (phoneNumber !== undefined) {
 			const trimmedPhone = phoneNumber.trim();
-			const phoneRegex = /^0\d{9}$/; // Ví dụ: 10 số, bắt đầu bằng 0 (ở VN)
-			if (trimmedPhone && !phoneRegex.test(trimmedPhone)) {
-				return res.status(400).json({
-					success: false,
-					message: "Số điện thoại không hợp lệ",
-				});
+			if (trimmedPhone) {
+				if (!/^\d{10,15}$/.test(trimmedPhone)) {
+					return res.status(400).json({
+						success: false,
+						message: "Invalid phone number format",
+					});
+				}
+				updateData.phoneNumber = trimmedPhone;
+			} else {
+				updateData.phoneNumber = null;
 			}
-			updateData.phoneNumber = trimmedPhone || null;
 		}
 
-		// Kiểm tra có dữ liệu để cập nhật không
+		// Update date of birth
+		if (dateOfBirth !== undefined) {
+			if (dateOfBirth) {
+				const birthDate = new Date(dateOfBirth);
+				const today = new Date();
+				if (isNaN(birthDate.getTime()) || birthDate >= today) {
+					return res.status(400).json({
+						success: false,
+						message: "Invalid date of birth",
+					});
+				}
+				updateData.dateOfBirth = birthDate;
+			} else {
+				updateData.dateOfBirth = null;
+			}
+		}
+
+		// Check if there's data to update
 		if (Object.keys(updateData).length === 0) {
 			return res.status(400).json({
 				success: false,
-				message: "Không có dữ liệu để cập nhật",
+				message: "No data to update",
 			});
 		}
 
-		// Cập nhật user
+		// Update user
 		const updatedUser = await User.findByIdAndUpdate(userId, updateData, {
 			new: true,
 			runValidators: true,
-			context: "query",
 		}).select("-password");
 
 		if (!updatedUser) {
 			return res.status(404).json({
 				success: false,
-				message: "Không tìm thấy người dùng để cập nhật",
+				message: "User not found for update",
 			});
 		}
 
 		res.json({
 			success: true,
-			message: "Cập nhật thông tin thành công",
+			message: "User information updated successfully",
 			data: updatedUser,
 		});
 	} catch (error) {
 		console.error("Update user error:", error);
 
 		if (error.name === "ValidationError") {
-			const messages = Object.values(error.errors).map(
-				(err) => err.message
-			);
+			const messages = Object.values(error.errors).map(err => err.message);
 			return res.status(400).json({
 				success: false,
-				message: "Lỗi validation",
+				message: "Validation error",
 				errors: messages,
 			});
 		}
 
-		// Xử lý lỗi duplicate key (email đã tồn tại)
 		if (error.code === 11000) {
 			return res.status(400).json({
 				success: false,
-				message: "Email đã được sử dụng bởi người dùng khác",
+				message: "Email already in use by another user",
 			});
 		}
 
 		res.status(500).json({
 			success: false,
-			message: "Lỗi cập nhật thông tin người dùng",
-			error: error.message,
+			message: "Error updating user information",
 		});
 	}
 };
 
-// 7. Xóa user (Admin only)
+// 8. Delete user (Admin only)
 const deleteUser = async (req, res) => {
 	try {
 		const { userId } = req.params;
@@ -417,15 +594,15 @@ const deleteUser = async (req, res) => {
 		if (!userId.match(/^[0-9a-fA-F]{24}$/)) {
 			return res.status(400).json({
 				success: false,
-				message: "ID người dùng không hợp lệ",
+				message: "Invalid user ID format",
 			});
 		}
 
-		// Không cho phép admin tự xóa chính mình
+		// Prevent admin from deleting themselves
 		if (userId === req.user.userId) {
 			return res.status(400).json({
 				success: false,
-				message: "Không thể xóa tài khoản của chính mình",
+				message: "Cannot delete your own account",
 			});
 		}
 
@@ -434,34 +611,43 @@ const deleteUser = async (req, res) => {
 		if (!user) {
 			return res.status(404).json({
 				success: false,
-				message: "Không tìm thấy người dùng để xóa",
+				message: "User not found for deletion",
 			});
+		}
+
+		// Prepare deleted user info for response
+		const deletedUserInfo = {
+			_id: user._id,
+			name: user.name,
+			role: user.role,
+			authMethod: user.authMethod,
+		};
+
+		if (user.authMethod === "traditional") {
+			deletedUserInfo.email = user.email;
+		} else {
+			deletedUserInfo.walletAddress = user.walletAddress;
 		}
 
 		res.json({
 			success: true,
-			message: "Xóa người dùng thành công",
+			message: "User deleted successfully",
 			data: {
-				deletedUser: {
-					_id: user._id,
-					name: user.name,
-					email: user.email,
-					role: user.role,
-				},
+				deletedUser: deletedUserInfo,
 			},
 		});
 	} catch (error) {
 		console.error("Delete user error:", error);
 		res.status(500).json({
 			success: false,
-			message: "Lỗi xóa người dùng",
-			error: error.message,
+			message: "Error deleting user",
 		});
 	}
 };
 
 module.exports = {
 	registerUser,
+	registerWalletUser,
 	getUsers,
 	getDoctors,
 	getPatients,

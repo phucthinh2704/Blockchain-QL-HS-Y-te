@@ -3,14 +3,17 @@ const crypto = require("crypto");
 
 const blockSchema = new mongoose.Schema(
 	{
-		index: Number,
+		index: {
+			type: Number,
+			required: true,
+		},
 		timestamp: {
 			type: Date,
 			default: Date.now,
 		},
 		data: {
 			recordId: {
-				type: String, // JWT token
+				type: String, // Hash của record ID
 				required: true,
 			},
 			action: {
@@ -38,8 +41,9 @@ const blockSchema = new mongoose.Schema(
 	{ timestamps: true }
 );
 
-// QUAN TRỌNG: Thêm index cho hiệu suất
-blockSchema.index({ "data.recordIdHash": 1, index: 1 });
+// Index cho hiệu suất
+blockSchema.index({ "data.recordId": 1, index: 1 });
+blockSchema.index({ index: 1 }); // Thêm index cho việc sort
 
 blockSchema.statics.calculateHash = function (
 	index,
@@ -56,9 +60,43 @@ blockSchema.statics.calculateHash = function (
 		timestampStr = String(timestamp);
 	}
 
-	const dataStr = JSON.stringify(data, null, 0);
+	// QUAN TRỌNG: Chuẩn hóa data trước khi stringify
+	const normalizedData = { ...data };
+
+	// ✅ XỬ LÝ updatedBy một cách nhất quán
+	if (normalizedData.updatedBy) {
+		// Trường hợp 1: updatedBy là object đã populate (có _id)
+		if (
+			typeof normalizedData.updatedBy === "object" &&
+			normalizedData.updatedBy._id
+		) {
+			normalizedData.updatedBy = normalizedData.updatedBy._id.toString();
+		}
+		// Trường hợp 2: updatedBy là ObjectId hoặc string
+		else if (normalizedData.updatedBy.toString) {
+			normalizedData.updatedBy = normalizedData.updatedBy.toString();
+		}
+		// Trường hợp 3: updatedBy đã là string
+		else if (typeof normalizedData.updatedBy === "string") {
+			// Giữ nguyên
+		}
+	}
+
+	const dataStr = JSON.stringify(
+		normalizedData,
+		Object.keys(normalizedData).sort()
+	);
 	const inputString = index + timestampStr + dataStr + previousHash;
 	const hash = crypto.createHash("sha256").update(inputString).digest("hex");
+
+	console.log(`🔍 Hash calculation for block ${index}:`, {
+		index,
+		timestamp: timestampStr,
+		normalizedData,
+		dataStr,
+		previousHash: previousHash.substring(0, 16) + "...",
+		hash: hash.substring(0, 16) + "...",
+	});
 
 	return hash;
 };
