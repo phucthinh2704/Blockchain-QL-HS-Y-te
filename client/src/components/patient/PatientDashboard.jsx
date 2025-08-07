@@ -14,6 +14,7 @@ import {
 	Shield,
 	User,
 	X,
+	Wallet,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Navigate, useLocation } from "react-router-dom";
@@ -25,7 +26,7 @@ import {
 } from "../../apis/record";
 import { apiUpdateUser } from "../../apis/user";
 import useAuth from "../../hooks/useAuth";
-import { formatDate, formatDateTime } from "../../utils/dateUtils"; // Assuming you have a utility for date formatting
+import { formatDate, formatDateTime } from "../../utils/dateUtils";
 import TabButton from "../patient/TabButton";
 import BlockchainTab from "./BlockchainTab";
 
@@ -45,6 +46,7 @@ const PatientDashboard = () => {
 	const [recordVerifications, setRecordVerifications] = useState({});
 	const [recordHistories, setRecordHistories] = useState({});
 	const [verifyingRecords, setVerifyingRecords] = useState(new Set());
+	console.log(medicalRecords)
 
 	useEffect(() => {
 		const fetchMedicalRecords = async () => {
@@ -69,24 +71,30 @@ const PatientDashboard = () => {
 	}, [user]);
 
 	useEffect(() => {
-		// Chỉ setup editForm khi có user
+		// Setup editForm when user is available
 		if (user) {
-			setEditForm({
+			const formData = {
 				name: user.name,
-				email: user.email,
 				phoneNumber: user.phoneNumber || "",
-			});
+			};
+
+			// Only include email for traditional auth users
+			if (user.authMethod === "traditional") {
+				formData.email = user.email;
+			}
+
+			setEditForm(formData);
 		}
 	}, [user]);
 
 	useEffect(() => {
-		const { activeTab } = location.state || {}; // lấy giá trị activeTab
+		const { activeTab } = location.state || {};
 		if (activeTab) {
 			setActiveTab(activeTab);
 		}
 	}, [location.state]);
 
-	// Hiển thị thông báo nếu chưa đăng nhập
+	// Redirect if not authenticated or wrong role
 	if (!user) {
 		return (
 			<Navigate
@@ -110,178 +118,22 @@ const PatientDashboard = () => {
 		);
 	}
 
-	// Handler để xác thực tất cả blocks của bệnh nhân
-	// const handleVerifyAllPatientBlocks = () => {
-	// 	if (!user?._id) return;
-
-	// 	setVerifyingAllBlocks(true);
-	// 	setAllBlocksVerification(null);
-
-	// 	setTimeout(async () => {
-	// 		try {
-	// 			const response = await apiVerifyAllPatientBlocks(user._id);
-
-	// 			if (response.success) {
-	// 				setAllBlocksVerification(response.data);
-
-	// 				if (!response.data.overallValid) {
-	// 					Swal.fire({
-	// 						icon: "warning",
-	// 						title: "Phát hiện vấn đề blockchain",
-	// 						text: `Có ${response.data.statistics.invalidBlocks} blocks không hợp lệ. Vui lòng liên hệ quản trị viên.`,
-	// 						confirmButtonText: "Đã hiểu",
-	// 					});
-	// 				} else {
-	// 					Swal.fire({
-	// 						icon: "success",
-	// 						title: "Xác thực thành công",
-	// 						text: "Tất cả hồ sơ y tế của bạn đều hợp lệ và an toàn!",
-	// 						confirmButtonText: "Tuyệt vời!",
-	// 					});
-	// 				}
-	// 			} else {
-	// 				throw new Error(response.message || "Lỗi xác thực");
-	// 			}
-	// 		} catch (error) {
-	// 			console.error("Error verifying all patient blocks:", error);
-	// 			Swal.fire({
-	// 				icon: "error",
-	// 				title: "Lỗi xác thực",
-	// 				text: "Không thể xác thực các blocks của bạn. Vui lòng thử lại sau.",
-	// 			});
-	// 		} finally {
-	// 			setVerifyingAllBlocks(false);
-	// 		}
-	// 	}, 3000);
-	// };
-
-	// // Handler để xác thực blocks theo khoảng thời gian
-	// const handleVerifyTimeRange = () => {
-	// 	if (!user?._id) return;
-
-	// 	// Kiểm tra ít nhất một trong hai ngày được chọn
-	// 	if (!timeRangeFilter.startDate && !timeRangeFilter.endDate) {
-	// 		Swal.fire({
-	// 			icon: "warning",
-	// 			title: "Chưa chọn khoảng thời gian",
-	// 			text: "Vui lòng chọn ít nhất một ngày bắt đầu hoặc kết thúc.",
-	// 		});
-	// 		return;
-	// 	}
-
-	// 	// Kiểm tra logic ngày
-	// 	if (timeRangeFilter.startDate || timeRangeFilter.endDate) {
-	// 		const today = new Date();
-	// 		today.setHours(0, 0, 0, 0); // chỉ so sánh theo ngày, bỏ giờ
-
-	// 		const { startDate, endDate } = timeRangeFilter;
-
-	// 		if (startDate) {
-	// 			const start = new Date(startDate);
-	// 			if (start > today) {
-	// 				Swal.fire({
-	// 					icon: "warning",
-	// 					title: "Ngày bắt đầu không hợp lệ",
-	// 					text: "Ngày bắt đầu không thể nằm trong tương lai.",
-	// 				});
-	// 				return;
-	// 			}
-	// 		}
-
-	// 		if (endDate) {
-	// 			const end = new Date(endDate);
-	// 			if (end > today) {
-	// 				Swal.fire({
-	// 					icon: "warning",
-	// 					title: "Ngày kết thúc không hợp lệ",
-	// 					text: "Ngày kết thúc không thể nằm trong tương lai.",
-	// 				});
-	// 				return;
-	// 			}
-	// 		}
-
-	// 		if (
-	// 			new Date(timeRangeFilter.startDate) >
-	// 			new Date(timeRangeFilter.endDate)
-	// 		) {
-	// 			Swal.fire({
-	// 				icon: "warning",
-	// 				title: "Khoảng thời gian không hợp lệ",
-	// 				text: "Ngày bắt đầu không thể sau ngày kết thúc.",
-	// 			});
-	// 			return;
-	// 		}
-	// 	}
-
-	// 	setVerifyingTimeRange(true);
-	// 	setTimeRangeVerification(null);
-
-	// 	setTimeout(async () => {
-	// 		try {
-	// 			const response = await apiVerifyPatientBlocksTimeRange(
-	// 				user._id,
-	// 				timeRangeFilter.startDate,
-	// 				timeRangeFilter.endDate
-	// 			);
-
-	// 			if (response.success) {
-	// 				setTimeRangeVerification(response.data);
-
-	// 				if (response.data.statistics.totalBlocks === 0) {
-	// 					Swal.fire({
-	// 						icon: "info",
-	// 						title: "Không có dữ liệu",
-	// 						text: "Không có hồ sơ nào trong khoảng thời gian đã chọn.",
-	// 					});
-	// 				} else if (!response.data.overallValid) {
-	// 					Swal.fire({
-	// 						icon: "warning",
-	// 						title: "Phát hiện vấn đề",
-	// 						text: `Có ${response.data.statistics.invalidBlocks} blocks không hợp lệ trong khoảng thời gian này.`,
-	// 					});
-	// 				} else {
-	// 					Swal.fire({
-	// 						icon: "success",
-	// 						title: "Xác thực thành công",
-	// 						text: `Tất cả ${response.data.statistics.totalBlocks} hồ sơ trong khoảng thời gian này đều hợp lệ!`,
-	// 					});
-	// 				}
-	// 			} else {
-	// 				throw new Error(response.message || "Lỗi xác thực");
-	// 			}
-	// 		} catch (error) {
-	// 			console.error("Error verifying time range blocks:", error);
-	// 			Swal.fire({
-	// 				icon: "error",
-	// 				title: "Lỗi xác thực",
-	// 				text: "Không thể xác thực các blocks trong khoảng thời gian này. Vui lòng thử lại sau.",
-	// 			});
-	// 		} finally {
-	// 			setVerifyingTimeRange(false);
-	// 		}
-	// 	}, 1500);
-	// };
-
-	// Helper function để clear time range filter
-	// const handleClearTimeRange = () => {
-	// 	setTimeRangeFilter({
-	// 		startDate: "",
-	// 		endDate: "",
-	// 	});
-	// 	setTimeRangeVerification(null);
-	// };
-
 	const handleEditProfile = () => {
 		setIsEditing(true);
 	};
 
 	const handleCancelEdit = () => {
 		setIsEditing(false);
-		setEditForm({
+		const formData = {
 			name: user?.name,
-			email: user?.email,
 			phoneNumber: user?.phoneNumber || "",
-		});
+		};
+
+		if (user?.authMethod === "traditional") {
+			formData.email = user?.email;
+		}
+
+		setEditForm(formData);
 	};
 
 	const handleSaveProfile = async () => {
@@ -314,7 +166,7 @@ const PatientDashboard = () => {
 		}
 	};
 
-	// New functions for individual record verification
+	// Functions for individual record verification
 	const handleVerifyRecord = (recordId) => {
 		setVerifyingRecords((prev) => new Set([...prev, recordId]));
 
@@ -346,7 +198,6 @@ const PatientDashboard = () => {
 
 	const handleViewHistory = async (recordId) => {
 		if (recordHistories[recordId]) {
-			// If already loaded, just toggle
 			setExpandedRecord(expandedRecord === recordId ? null : recordId);
 			return;
 		}
@@ -394,25 +245,50 @@ const PatientDashboard = () => {
 		}
 	};
 
+	const getAuthMethodDisplay = (authMethod) => {
+		switch (authMethod) {
+			case "traditional":
+				return "Email/Mật khẩu";
+			case "wallet":
+				return "Ví điện tử";
+			default:
+				return "Không xác định";
+		}
+	};
+
 	return (
 		<div className="min-h-screen bg-gray-50 p-4">
 			<div className="max-w-6xl mx-auto">
 				{/* Header */}
 				<div className="bg-white rounded-lg shadow-sm p-6 mb-6">
-					<div className="flex items-center space-x-4">
-						<div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center">
-							<User
-								className="text-blue-600"
-								size={24}
-							/>
+					<div className="flex items-center justify-between">
+						<div className="flex items-center space-x-4">
+							<div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center">
+								<User
+									className="text-blue-600"
+									size={24}
+								/>
+							</div>
+							<div>
+								<h1 className="text-2xl font-bold text-gray-900">
+									Chào mừng, {user?.name}
+								</h1>
+								<p className="text-gray-600">
+									Hệ thống Quản lý Hồ sơ Y tế Blockchain
+								</p>
+							</div>
 						</div>
-						<div>
-							<h1 className="text-2xl font-bold text-gray-900">
-								Chào mừng, {user?.name}
-							</h1>
-							<p className="text-gray-600">
-								Hệ thống Quản lý Hồ sơ Y tế Blockchain
-							</p>
+						
+						{/* Authentication method indicator */}
+						<div className="flex items-center space-x-2 px-3 py-1 bg-gray-100 rounded-full">
+							{user?.authMethod === "wallet" ? (
+								<Wallet className="text-purple-600" size={16} />
+							) : (
+								<Mail className="text-blue-600" size={16} />
+							)}
+							<span className="text-sm text-gray-700">
+								{getAuthMethodDisplay(user?.authMethod)}
+							</span>
 						</div>
 					</div>
 				</div>
@@ -744,7 +620,7 @@ const PatientDashboard = () => {
 																								.updatedBy
 																								.name
 																						}
-																						{` (${transaction.updatedBy.email})`}
+																						{` (${transaction.updatedBy.email || transaction.updatedBy.walletAddress})`}
 																					</div>
 																				)}
 																				<div className="text-sm text-gray-700">
@@ -789,6 +665,7 @@ const PatientDashboard = () => {
 							)}
 						</div>
 					)}
+
 					{/* Profile Tab */}
 					{activeTab === "profile" && (
 						<div className="p-6">
@@ -813,6 +690,7 @@ const PatientDashboard = () => {
 
 							<div className="max-w-2xl">
 								<div className="grid gap-6">
+									{/* Name */}
 									<div>
 										<label className="block text-lg font-medium text-gray-700 mb-2">
 											Họ và tên
@@ -842,35 +720,63 @@ const PatientDashboard = () => {
 										)}
 									</div>
 
-									<div>
-										<label className="block text-lg font-medium text-gray-700 mb-2">
-											Email
-										</label>
-										{isEditing ? (
-											<input
-												type="email"
-												value={editForm.email}
-												onChange={(e) =>
-													setEditForm((prev) => ({
-														...prev,
-														email: e.target.value,
-													}))
-												}
-												className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-											/>
-										) : (
+									{/* Email (only for traditional auth) */}
+									{user?.authMethod === "traditional" && (
+										<div>
+											<label className="block text-lg font-medium text-gray-700 mb-2">
+												Email
+											</label>
+											{isEditing ? (
+												<input
+													type="email"
+													value={editForm.email || ""}
+													onChange={(e) =>
+														setEditForm((prev) => ({
+															...prev,
+															email: e.target.value,
+														}))
+													}
+													className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+												/>
+											) : (
+												<div className="flex items-center space-x-2">
+													<Mail
+														size={16}
+														className="text-gray-400"
+													/>
+													<span className="text-gray-900">
+														{user?.email}
+													</span>
+												</div>
+											)}
+										</div>
+									)}
+
+									{/* Wallet Address (only for wallet auth) */}
+									{user?.authMethod === "wallet" && (
+										<div>
+											<label className="block text-lg font-medium text-gray-700 mb-2">
+												Địa chỉ ví
+											</label>
 											<div className="flex items-center space-x-2">
-												<Mail
+												<Wallet
 													size={16}
 													className="text-gray-400"
 												/>
-												<span className="text-gray-900">
-													{user?.email}
+												<span className="text-gray-900 font-mono text-sm break-all">
+													{user?.walletAddress}
 												</span>
+												{user?.isWalletVerified && (
+													<span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-green-100 text-green-800">
+														<Check size={12} className="mr-1" />
+														Đã xác minh
+													</span>
+												)}
 											</div>
-										)}
-									</div>
+										</div>
+									)}
 
+									{/* Phone Number */}
 									<div>
 										<label className="block text-lg font-medium text-gray-700 mb-2">
 											Số điện thoại
@@ -902,21 +808,25 @@ const PatientDashboard = () => {
 										)}
 									</div>
 
-									<div>
-										<label className="block text-lg font-medium text-gray-700 mb-2">
-											Ngày sinh
-										</label>
-										<div className="flex items-center space-x-2">
-											<Calendar
-												size={16}
-												className="text-gray-400"
-											/>
-											<span className="text-gray-900">
-												{formatDate(user?.dateOfBirth)}
-											</span>
+									{/* Date of Birth */}
+									{user?.dateOfBirth && (
+										<div>
+											<label className="block text-lg font-medium text-gray-700 mb-2">
+												Ngày sinh
+											</label>
+											<div className="flex items-center space-x-2">
+												<Calendar
+													size={16}
+													className="text-gray-400"
+												/>
+												<span className="text-gray-900">
+													{formatDate(user?.dateOfBirth)}
+												</span>
+											</div>
 										</div>
-									</div>
+									)}
 
+									{/* Role */}
 									<div>
 										<label className="block text-lg font-medium text-gray-700 mb-2">
 											Vai trò
@@ -924,6 +834,45 @@ const PatientDashboard = () => {
 										<span className="inline-flex items-center px-3 py-1 rounded-full text-lg font-medium bg-green-100 text-green-800">
 											Bệnh nhân
 										</span>
+									</div>
+
+									{/* Authentication Method */}
+									<div>
+										<label className="block text-lg font-medium text-gray-700 mb-2">
+											Phương thức xác thực
+										</label>
+										<div className="flex items-center space-x-2">
+											{user?.authMethod === "wallet" ? (
+												<Wallet
+													size={16}
+													className="text-purple-600"
+												/>
+											) : (
+												<Mail
+													size={16}
+													className="text-blue-600"
+												/>
+											)}
+											<span className="text-gray-900">
+												{getAuthMethodDisplay(user?.authMethod)}
+											</span>
+										</div>
+									</div>
+
+									{/* Account Created Date */}
+									<div>
+										<label className="block text-lg font-medium text-gray-700 mb-2">
+											Ngày tạo tài khoản
+										</label>
+										<div className="flex items-center space-x-2">
+											<Calendar
+												size={16}
+												className="text-gray-400"
+											/>
+											<span className="text-gray-900">
+												{formatDateTime(user?.createdAt)}
+											</span>
+										</div>
 									</div>
 								</div>
 
@@ -953,6 +902,7 @@ const PatientDashboard = () => {
 							</div>
 						</div>
 					)}
+
 					{/* Blockchain Tab */}
 					{activeTab === "blockchain" && <BlockchainTab medicalRecords={medicalRecords} />}
 				</div>
@@ -960,4 +910,5 @@ const PatientDashboard = () => {
 		</div>
 	);
 };
+
 export default PatientDashboard;

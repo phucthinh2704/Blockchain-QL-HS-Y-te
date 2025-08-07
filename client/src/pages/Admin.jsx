@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import Header from "../components/common/Header";
-import AdminDashboard from "../components/admin/AdminDashboard";
+// import AdminDashboard from "../components/admin/AdminDashboard";
+import AdminDashboard from "../components/admin/AdminDashboardTemp";
 
 const Admin = () => {
 	useEffect(() => {

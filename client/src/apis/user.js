@@ -21,3 +21,9 @@ export const apiGetAllUsers = async () =>
 		url: `/users`,
 		withCredentials: true,
 	});
+export const apiGetAllPatients = async () =>
+	axios({
+		method: "GET",
+		url: `/medical/patients`,
+		withCredentials: true,
+	});

@@ -106,3 +106,16 @@ export const apiGetUpcomingAppointments = async (doctorId) => {
 		throw error;
 	}
 };
+
+export const apiGetAllMedicalRecords = async () => {
+	try {
+		const response = await axios({
+			method: "GET",
+			url: "/medical",
+		});
+		return response;
+	} catch (error) {
+		console.error("Error in apiGetAllMedicalRecords:", error);
+		throw error;
+	}
+};

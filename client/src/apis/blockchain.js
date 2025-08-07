@@ -42,6 +42,32 @@ export const apiVerifyPatientBlocksTimeRange = async (patientId, startDate, endD
    }
 };
 
+export const apiVerifyAllBlocks = async () => {
+   try {
+      const response = await axios({
+         method: "GET",
+         url: `/blockchain/verify`,
+      });
+      return response;
+   } catch (error) {
+      console.error("Error in apiVerifyAllBlocks:", error);
+      throw error;
+   }
+};
+
+export const apiGetBlockchainInformation = async () => {
+   try {
+      const response = await axios({
+         method: "GET",
+         url: `/blockchain/info`,
+      });
+      return response;
+   } catch (error) {
+      console.error("Error in apiGetBlockchainInfo:", error);
+      throw error;
+   }
+}
+
 export const apiGetDetailBlockByIndex = async (index) => {
    try {
       const response = await axios({

@@ -11,6 +11,8 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { apiUpdateMedicalRecord } from "../../apis/record";
+import { formatDateTime } from "../../utils/dateUtils";
+import Swal from "sweetalert2";
 
 const MedicalRecordEditor = ({ record, onSave, onCancel, isOpen = true }) => {
 	const [formData, setFormData] = useState({
@@ -167,7 +169,9 @@ const MedicalRecordEditor = ({ record, onSave, onCancel, isOpen = true }) => {
 							</div>
 							<div className="flex items-center gap-2">
 								<Phone className="w-4 h-4 text-gray-600" />
-								<span className="font-medium">Số điện thoại:</span>
+								<span className="font-medium">
+									Số điện thoại:
+								</span>
 								<span>{record.patientId?.phoneNumber}</span>
 							</div>
 							<div className="flex items-center gap-2">
@@ -346,11 +350,33 @@ const MedicalRecordEditor = ({ record, onSave, onCancel, isOpen = true }) => {
 								<p className="text-red-700">{errors.submit}</p>
 							</div>
 						)}
+						<p className="text-sm text-gray-500">
+							Bạn sẽ ký thông điệp này để xác nhận và lưu trữ hồ
+							sơ vào blockchain một cách an toàn vào lúc{" "}
+							{`${new Date().getHours()}:${new Date().getMinutes()}:${new Date().getSeconds()}`}{" "}
+							{formatDateTime(new Date())}.
+						</p>
 
 						{/* Action Buttons */}
 						<div className="flex gap-4 pt-6 border-t">
 							<button
-								onClick={handleSubmit}
+								onClick={(e) => {
+									e.preventDefault();
+									Swal.fire({
+										title: "Xác nhận tạo hồ sơ",
+										text: "Bằng việc ấn nút Xác nhận, bạn sẽ ký thông điệp này và lưu trữ hồ sơ vào blockchain.",
+										icon: "warning",
+										showCancelButton: true,
+										confirmButtonText: "Xác nhận",
+										cancelButtonText: "Hủy",
+										confirmButtonColor: "#3085d6",
+										cancelButtonColor: "#d33",
+									}).then((result) => {
+										if (result.isConfirmed) {
+											handleSubmit();
+										}
+									});
+								}}
 								disabled={loading}
 								className="flex items-center gap-2 bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer">
 								<Save className="w-4 h-4" />

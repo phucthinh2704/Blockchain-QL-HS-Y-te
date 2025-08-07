@@ -148,7 +148,8 @@ const Header = () => {
 										{user?.name || "Người dùng"}
 									</p>
 									<p className="text-xs text-gray-500">
-										{user?.email || "user@example.com"}
+										{/* {user?.email || user?.walletAddress} */}
+										{user?.walletAddress || "0xa1b2c3d4e5f60718293a4b5c6d7e8f901234abcd"}
 									</p>
 								</div>
 								<ChevronDown
@@ -167,8 +168,9 @@ const Header = () => {
 												{user?.name || "Người dùng"}
 											</p>
 											<p className="text-xs text-gray-500 truncate">
-												{user?.email ||
-													"user@example.com"}
+												{/* {user?.email ||
+													user?.walletAddress} */}
+												{user?.walletAddress || "0xa1b2c3d4e5f60718293a4b5c6d7e8f901234abcd"}
 											</p>
 										</div>
 

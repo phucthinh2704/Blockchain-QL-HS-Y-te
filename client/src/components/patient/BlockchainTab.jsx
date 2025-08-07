@@ -103,7 +103,7 @@ const BlockchainTab = ({ medicalRecords }) => {
 			} finally {
 				setVerifyingAllBlocks(false);
 			}
-		}, 1500);
+		}, 2500);
 	};
 
 	const handleVerifyRecord = (recordId) => {

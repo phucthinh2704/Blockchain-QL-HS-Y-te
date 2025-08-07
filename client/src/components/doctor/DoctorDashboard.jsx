@@ -107,13 +107,15 @@ const DoctorDashboard = () => {
 		}
 	}, [fetchUpcomingAppointments, user]);
 
-	if (!user || user?.role !== "doctor") {
-		return (
-			<UnauthorizedAccess
-				user={user}
-				allowedRole={"doctor"}
-			/>
-		);
+	if (user?.role !== "doctor") {
+		setTimeout(() => {
+			return (
+				<UnauthorizedAccess
+					user={user}
+					allowedRole={"doctor"}
+				/>
+			);
+		}, 100);
 	}
 
 	// Stats calculations

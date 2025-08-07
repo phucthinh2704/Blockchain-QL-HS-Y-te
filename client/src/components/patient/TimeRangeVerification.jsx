@@ -105,36 +105,39 @@ const TimeRangeVerification = () => {
 		setVerifyingTimeRange(true);
 		setTimeRangeVerification(null);
 
-		try {
-			const response = await apiVerifyPatientBlocksTimeRange(
-				user._id,
-				timeRangeFilter.startDate,
-				timeRangeFilter.endDate
-			);
-
-			if (!response.success) {
-				showAlert(
-					"error",
-					"Lỗi",
-					response.message || "Không thể xác thực khoảng thời gian"
+		setTimeout(async () => {
+			try {
+				const response = await apiVerifyPatientBlocksTimeRange(
+					user._id,
+					timeRangeFilter.startDate,
+					timeRangeFilter.endDate
 				);
-				return;
+
+				if (!response.success) {
+					showAlert(
+						"error",
+						"Lỗi",
+						response.message ||
+							"Không thể xác thực khoảng thời gian"
+					);
+					return;
+				}
+
+				setTimeRangeVerification(response.data);
+				console.log(response.data);
+
+				showAlert(
+					"success",
+					"Xác thực khoảng thời gian",
+					`Đã xác thực ${response.data.statistics.validBlocks} blocks hợp lệ trong tổng số ${response.data.statistics.totalBlocks} blocks.`
+				);
+			} catch (error) {
+				console.error("Error verifying time range:", error);
+				showAlert("error", "Lỗi", "Có lỗi xảy ra khi xác thực");
+			} finally {
+				setVerifyingTimeRange(false);
 			}
-
-			setTimeRangeVerification(response.data);
-			console.log(response.data);
-
-			showAlert(
-				"success",
-				"Xác thực khoảng thời gian",
-				`Đã xác thực ${response.data.statistics.validBlocks} blocks hợp lệ trong tổng số ${response.data.statistics.totalBlocks} blocks.`
-			);
-		} catch (error) {
-			console.error("Error verifying time range:", error);
-			showAlert("error", "Lỗi", "Có lỗi xảy ra khi xác thực");
-		} finally {
-			setVerifyingTimeRange(false);
-		}
+		}, 1500);
 	};
 
 	const handleClearTimeRange = () => {
@@ -672,11 +675,12 @@ const TimeRangeVerification = () => {
 																			.name
 																	}{" "}
 																	(
-																	{
+																	{result
+																		.updatedBy
+																		.email ||
 																		result
 																			.updatedBy
-																			.email
-																	}
+																			.walletAddress}
 																	)
 																</div>
 															)}

@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import Header from "../components/common/Header";
-import DoctorDashboard from "../components/doctor/DoctorDashboard";
+// import DoctorDashboard from "../components/doctor/DoctorDashboard";
+import DoctorDashboard from "../components/doctor/DoctorDashboardTemp";
 
 const Doctor = () => {
 	useEffect(() => {
